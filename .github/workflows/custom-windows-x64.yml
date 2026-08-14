@@ -1,0 +1,66 @@
+name: Build QtScrcpy custom v4.1 fps-250hz-rawinput Windows x64
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/custom-windows-x64.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - shell: pwsh
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Build and install custom scrcpy server
+        shell: pwsh
+        run: |
+          & "server-patches/build-custom-server.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "Custom scrcpy server build failed" }
+      - uses: jurplel/install-qt-action@v4.1.1
+        with:
+          version: "5.15.2"
+          target: desktop
+          arch: win64_msvc2019_64
+          cache: true
+      - name: Build QtScrcpy
+        shell: pwsh
+        run: |
+          Set-Content -Path "QtScrcpy/appversion" -Value "4.1.0" -NoNewline
+          cmake -S . -B build-custom -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$env:Qt5_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+          cmake --build build-custom --config RelWithDebInfo --parallel 8
+          if ($LASTEXITCODE -ne 0) { throw "QtScrcpy build failed" }
+      - name: Package portable build
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:GITHUB_WORKSPACE "output/x64/RelWithDebInfo"
+          $package = Join-Path $env:GITHUB_WORKSPACE "package/QtScrcpy-custom-v4.1-fps-250hz-rawinput-win-x64"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item (Join-Path $release "*") $package -Recurse -Force
+          Copy-Item "QtScrcpy/QtScrcpyCore/src/third_party/adb/win/*" $package -Force
+          Copy-Item "QtScrcpy/QtScrcpyCore/src/third_party/scrcpy-server" $package -Force
+          Copy-Item "keymap" (Join-Path $package "keymap") -Recurse -Force
+          Copy-Item "config" (Join-Path $package "config") -Recurse -Force
+          windeployqt --release --compiler-runtime --no-translations (Join-Path $package "QtScrcpy.exe")
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          $required = @("QtScrcpy.exe", "adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "scrcpy-server", "Qt5Core.dll", "Qt5Gui.dll", "Qt5Widgets.dll")
+          foreach ($file in $required) { if (-not (Test-Path (Join-Path $package $file))) { throw "Missing package file: $file" } }
+          Compress-Archive -Path (Join-Path $package "*") -DestinationPath "$package.zip" -CompressionLevel Optimal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QtScrcpy-custom-v4.1-fps-250hz-rawinput-win-x64
+          path: package/QtScrcpy-custom-v4.1-fps-250hz-rawinput-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
