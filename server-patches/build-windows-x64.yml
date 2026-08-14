@@ -1,0 +1,98 @@
+name: Build custom QtScrcpy Windows x64
+
+on:
+  push:
+    branches:
+      - codex/qtscrcpy-build
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    env:
+      QT_INSTALL_PATH: ${{ github.workspace }}\Qt\5.15.2
+      QTSCRCPY_DIR: ${{ github.workspace }}\qtscrcpy
+      SCRCPY_DIR: ${{ github.workspace }}\scrcpy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 36
+        shell: pwsh
+        run: |
+          & "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat" `
+            "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Clone sources and apply patches
+        shell: pwsh
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git clone --branch dev --depth 1 https://github.com/barry-ran/qtscrcpy.git $env:QTSCRCPY_DIR
+          git -C $env:QTSCRCPY_DIR submodule update --init --recursive --depth 1
+          git -C $env:QTSCRCPY_DIR apply "${{ github.workspace }}\server-patches\qtscrcpy-main.patch"
+          git -C "$env:QTSCRCPY_DIR\QtScrcpy\QtScrcpyCore" apply "${{ github.workspace }}\server-patches\qtscrcpy-core.patch"
+          git clone --branch v4.1 --depth 1 https://github.com/Genymobile/scrcpy.git $env:SCRCPY_DIR
+          git -C $env:SCRCPY_DIR apply "${{ github.workspace }}\server-patches\0001-add-server-side-video-pause.patch"
+
+      - name: Test and build custom Android server
+        shell: pwsh
+        run: |
+          $env:GRADLE_USER_HOME = "${{ github.workspace }}\.gradle"
+          & "$env:SCRCPY_DIR\gradlew.bat" -p $env:SCRCPY_DIR :server:test :server:assembleRelease --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw "scrcpy server build failed" }
+          $serverApk = "$env:SCRCPY_DIR\server\build\outputs\apk\release\server-release-unsigned.apk"
+          Copy-Item $serverApk "$env:QTSCRCPY_DIR\QtScrcpy\QtScrcpyCore\src\third_party\scrcpy-server" -Force
+
+      - name: Install Qt 5.15.2
+        uses: jurplel/install-qt-action@v4.1.1
+        with:
+          version: 5.15.2
+          target: desktop
+          arch: win64_msvc2019_64
+          dir: ${{ github.workspace }}\Qt
+          cache: true
+
+      - name: Build QtScrcpy x64
+        shell: cmd
+        env:
+          ENV_QT_PATH: ${{ env.QT_INSTALL_PATH }}
+        run: |
+          cd /d %QTSCRCPY_DIR%
+          python ci\generate-version.py
+          call ci\win\build_for_win.bat RelWithDebInfo x64
+
+      - name: Package complete Windows build
+        shell: pwsh
+        env:
+          ENV_QT_PATH: ${{ env.QT_INSTALL_PATH }}
+          ENV_VCVARSALL: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
+          ENV_VCINSTALL: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC
+        run: |
+          Set-Location $env:QTSCRCPY_DIR
+          cmd.exe /c "ci\win\publish_for_win.bat x64 ..\..\package\QtScrcpy-custom-win-x64"
+          if ($LASTEXITCODE -ne 0) { throw "QtScrcpy packaging failed" }
+          Compress-Archive -Path "$env:QTSCRCPY_DIR\package\QtScrcpy-custom-win-x64\*" `
+            -DestinationPath "$env:QTSCRCPY_DIR\package\QtScrcpy-custom-win-x64.zip" -Force
+          Copy-Item "$env:SCRCPY_DIR\server\build\outputs\apk\release\server-release-unsigned.apk" `
+            "$env:QTSCRCPY_DIR\package\scrcpy-server-custom-v4.1"
+
+      - name: Upload complete package
+        uses: actions/upload-artifact@v4
+        with:
+          name: QtScrcpy-custom-win-x64
+          path: ${{ env.QTSCRCPY_DIR }}\package\QtScrcpy-custom-win-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload custom server separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrcpy-server-custom-v4.1
+          path: ${{ env.QTSCRCPY_DIR }}\package\scrcpy-server-custom-v4.1
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,1380 @@
+diff --git a/include/QtScrcpyCore.h b/include/QtScrcpyCore.h
+index 1e67de1..0f9eb5c 100644
+--- a/include/QtScrcpyCore.h
++++ b/include/QtScrcpyCore.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include <QPointer>
+ #include <QMouseEvent>
++#include <QPointF>
+ 
+ #include "QtScrcpyCoreDef.h"
+ 
+@@ -107,8 +108,15 @@ public:
+     virtual void disconnectDevice() = 0;
+ 
+     virtual void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
++    // High-resolution relative mouse input used by the Windows FPS path.
++    // Unlike QMouseEvent coordinates, delta is not limited by screen pixels.
++    virtual void mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize) = 0;
+     virtual void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
+     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
++    // Show an absolute Android cursor while bridging the primary click to touch.
++    // keepDevice avoids an Android InputReader device rescan during the short
++    // pointer -> FPS transition. No UHID reports are sent while disabled.
++    virtual void setMousePassthrough(bool enabled, bool keepDevice = false) = 0;
+ 
+     virtual void postGoBack() = 0;
+     virtual void postGoHome() = 0;
+@@ -120,6 +128,7 @@ public:
+     virtual void postCopy() = 0;
+     virtual void postCut() = 0;
+     virtual void setDisplayPower(bool on) = 0;
++    virtual void setVideoPaused(bool paused) = 0;
+     virtual void expandNotificationPanel() = 0;
+     virtual void expandSettingsPanel() = 0;
+     virtual void collapsePanel() = 0;
+diff --git a/src/device/controller/controller.cpp b/src/device/controller/controller.cpp
+index 8d0a621..5b20460 100644
+--- a/src/device/controller/controller.cpp
++++ b/src/device/controller/controller.cpp
+@@ -8,6 +8,108 @@
+ #include "receiver.h"
+ #include "videosocket.h"
+ 
++namespace {
++
++QSize clampAbsolutePointerRange(const QSize &frameSize)
++{
++    // The HID report carries unsigned 16-bit absolute coordinates. Real
++    // Android displays are far below this limit, but keep the descriptor valid
++    // if a malformed or synthetic video size is supplied.
++    return QSize(qBound(2, frameSize.width(), 0x10000),
++                 qBound(2, frameSize.height(), 0x10000));
++}
++
++QByteArray buildAbsolutePointerReportDescriptor(const QSize &frameSize)
++{
++    const QSize pointerRange = clampAbsolutePointerRange(frameSize);
++    const quint16 xMax = static_cast<quint16>(pointerRange.width() - 1);
++    const quint16 yMax = static_cast<quint16>(pointerRange.height() - 1);
++
++    static const unsigned char beforeXMaximum[] = {
++        0x05, 0x0d,       // Usage Page (Digitizers)
++        0x09, 0x01,       // Usage (Digitizer)
++        0xa1, 0x01,       // Collection (Application)
++        0x09, 0x20,       //   Usage (Stylus)
++        0xa1, 0x00,       //   Collection (Physical)
++        0x09, 0x42,       //     Usage (Tip Switch)
++        0x09, 0x32,       //     Usage (In Range)
++        0x15, 0x00,       //     Logical Minimum (0)
++        0x25, 0x01,       //     Logical Maximum (1)
++        0x75, 0x01,       //     Report Size (1)
++        0x95, 0x02,       //     Report Count (2)
++        0x81, 0x02,       //     Input (Data, Variable, Absolute)
++        0x75, 0x06,       //     Report Size (6)
++        0x95, 0x01,       //     Report Count (1)
++        0x81, 0x03,       //     Input (Constant, Variable, Absolute)
++        0x05, 0x01,       //     Usage Page (Generic Desktop)
++        0x09, 0x30,       //     Usage (X)
++        0x15, 0x00,       //     Logical Minimum (0)
++        0x26,             //     Logical Maximum (16-bit, value follows)
++    };
++    static const unsigned char betweenMaximums[] = {
++        0x75, 0x10,       //     Report Size (16)
++        0x95, 0x01,       //     Report Count (1)
++        0x81, 0x02,       //     Input (Data, Variable, Absolute)
++        0x09, 0x31,       //     Usage (Y)
++        0x15, 0x00,       //     Logical Minimum (0)
++        0x26,             //     Logical Maximum (16-bit, value follows)
++    };
++    static const unsigned char afterYMaximum[] = {
++        0x75, 0x10,       //     Report Size (16)
++        0x95, 0x01,       //     Report Count (1)
++        0x81, 0x02,       //     Input (Data, Variable, Absolute)
++        0xc0,             //   End Collection
++        0x05, 0x01,       //   Usage Page (Generic Desktop)
++        0x09, 0x01,       //   Usage (Pointer)
++        0xa1, 0x00,       //   Collection (Physical)
++        0x05, 0x09,       //     Usage Page (Buttons)
++        0x19, 0x01,       //     Usage Minimum (1)
++        0x29, 0x05,       //     Usage Maximum (5)
++        0x15, 0x00,       //     Logical Minimum (0)
++        0x25, 0x01,       //     Logical Maximum (1)
++        0x75, 0x01,       //     Report Size (1)
++        0x95, 0x05,       //     Report Count (5)
++        0x81, 0x02,       //     Input (Data, Variable, Absolute)
++        0x75, 0x03,       //     Report Size (3)
++        0x95, 0x01,       //     Report Count (1)
++        0x81, 0x03,       //     Input (Constant, Variable, Absolute)
++        0x05, 0x01,       //     Usage Page (Generic Desktop)
++        0x09, 0x38,       //     Usage (Wheel)
++        0x15, 0x81,       //     Logical Minimum (-127)
++        0x25, 0x7f,       //     Logical Maximum (127)
++        0x75, 0x08,       //     Report Size (8)
++        0x95, 0x01,       //     Report Count (1)
++        0x81, 0x06,       //     Input (Data, Variable, Relative)
++        0x05, 0x0c,       //     Usage Page (Consumer)
++        0x0a, 0x38, 0x02, //     Usage (AC Pan)
++        0x15, 0x81,       //     Logical Minimum (-127)
++        0x25, 0x7f,       //     Logical Maximum (127)
++        0x75, 0x08,       //     Report Size (8)
++        0x95, 0x01,       //     Report Count (1)
++        0x81, 0x06,       //     Input (Data, Variable, Relative)
++        0xc0,             //   End Collection
++        0xc0,             // End Collection
++    };
++
++    QByteArray descriptor;
++    descriptor.reserve(static_cast<int>(sizeof(beforeXMaximum)
++                                         + sizeof(betweenMaximums)
++                                         + sizeof(afterYMaximum) + 4));
++    descriptor.append(reinterpret_cast<const char *>(beforeXMaximum),
++                      static_cast<int>(sizeof(beforeXMaximum)));
++    descriptor.append(static_cast<char>(xMax & 0xff));
++    descriptor.append(static_cast<char>((xMax >> 8) & 0xff));
++    descriptor.append(reinterpret_cast<const char *>(betweenMaximums),
++                      static_cast<int>(sizeof(betweenMaximums)));
++    descriptor.append(static_cast<char>(yMax & 0xff));
++    descriptor.append(static_cast<char>((yMax >> 8) & 0xff));
++    descriptor.append(reinterpret_cast<const char *>(afterYMaximum),
++                      static_cast<int>(sizeof(afterYMaximum)));
++    return descriptor;
++}
++
++} // namespace
++
+ Controller::Controller(std::function<qint64(const QByteArray&)> sendData, QString gameScript, QObject *parent)
+     : QObject(parent)
+     , m_sendData(sendData)
+@@ -30,7 +132,8 @@ void Controller::postControlMsg(ControlMsg *controlMsg)
+         const auto type = controlMsg->type();
+         const bool isCameraControl = type == ControlMsg::CMT_CAMERA_SET_TORCH
+                 || type == ControlMsg::CMT_CAMERA_ZOOM_IN
+-                || type == ControlMsg::CMT_CAMERA_ZOOM_OUT;
++                || type == ControlMsg::CMT_CAMERA_ZOOM_OUT
++                || type == ControlMsg::CMT_SET_VIDEO_PAUSED;
+         if (!isCameraControl) {
+             qWarning() << "Ignoring display control message in camera mode:" << type;
+             delete controlMsg;
+@@ -76,6 +179,11 @@ void Controller::updateScript(QString gameScript)
+         m_inputConvert = new InputConvertNormal(this);
+     }
+     Q_ASSERT(m_inputConvert);
++    m_inputConvert->setMousePassthrough(
++        m_mousePassthrough,
++        m_mousePassthroughDeviceCreated
++            ? clampAbsolutePointerRange(m_mousePassthroughFrameSize)
++            : QSize());
+     connect(m_inputConvert, &InputConvertBase::grabCursor, this, &Controller::grabCursor);
+ }
+ 
+@@ -88,6 +196,95 @@ bool Controller::isCurrentCustomKeymap()
+     return m_inputConvert->isCurrentCustomKeymap();
+ }
+ 
++void Controller::setMousePassthrough(bool enabled, bool keepDevice)
++{
++    if (m_mousePassthrough == enabled) {
++        // A fast pointer -> FPS switch may have kept the idle UHID device. A
++        // later explicit disable/close must still be able to destroy it.
++        if (!enabled && !keepDevice) {
++            destroyMousePassthroughDevice();
++        }
++        return;
++    }
++
++    m_mousePassthrough = enabled;
++    if (!enabled) {
++        if (m_inputConvert) {
++            m_inputConvert->setMousePassthrough(false);
++        }
++        if (keepDevice) {
++            // The descriptor stays registered, but HOVER_EXIT above makes it
++            // inactive. This avoids an Android InputReader rescan on every '~'
++            // while FPS mouse movement immediately uses CMT_INJECT_TOUCH.
++            qInfo() << "UHID pointer suspended for direct FPS input";
++        } else {
++            destroyMousePassthroughDevice();
++        }
++    } else if (m_inputConvert) {
++        // The real frame size arrives with the explicit center MouseMove sent
++        // by VideoForm. Create the UHID descriptor lazily from that size so its
++        // raw X:Y aspect ratio matches Android's display viewport.
++        m_inputConvert->setMousePassthrough(
++            true,
++            m_mousePassthroughDeviceCreated
++                ? clampAbsolutePointerRange(m_mousePassthroughFrameSize)
++                : QSize());
++    }
++}
++
++void Controller::ensureMousePassthroughDevice(const QSize &frameSize)
++{
++    if (!m_mousePassthrough || frameSize.width() <= 1 || frameSize.height() <= 1) {
++        return;
++    }
++    if (m_mousePassthroughDeviceCreated && m_mousePassthroughFrameSize == frameSize) {
++        return;
++    }
++
++    // Android's drawing-tablet POINTER mode deliberately uses one fixed scale
++    // for both axes (max(xScale, yScale)). A square 32767x32767 descriptor on a
++    // rectangular tablet therefore cannot align with touchscreen coordinates.
++    // Recreate the UHID axes with the current video aspect ratio. The same path
++    // runs automatically after rotation or a display/video resize.
++    if (m_mousePassthroughDeviceCreated) {
++        if (m_inputConvert) {
++            m_inputConvert->setMousePassthrough(false);
++        }
++        destroyMousePassthroughDevice();
++    }
++
++    const QSize pointerRange = clampAbsolutePointerRange(frameSize);
++    ControlMsg *create = new ControlMsg(ControlMsg::CMT_UHID_CREATE);
++    create->setUhidCreateData(
++        2, 0, 0, QByteArray("QtScrcpy Absolute Game Pointer"),
++        buildAbsolutePointerReportDescriptor(pointerRange));
++    postControlMsg(create);
++    m_mousePassthroughDeviceCreated = true;
++    m_mousePassthroughFrameSize = frameSize;
++    qInfo() << "UHID absolute pointer calibrated to video frame:" << frameSize
++            << "axis range:" << pointerRange;
++
++    if (m_inputConvert) {
++        m_inputConvert->setMousePassthrough(true, pointerRange);
++    }
++}
++
++void Controller::destroyMousePassthroughDevice()
++{
++    if (!m_mousePassthroughDeviceCreated) {
++        m_mousePassthroughFrameSize = QSize();
++        return;
++    }
++
++    // Any touch release/proximity exit has already been queued by the input
++    // converter. Posted control events preserve order before this destroy.
++    ControlMsg *destroy = new ControlMsg(ControlMsg::CMT_UHID_DESTROY);
++    destroy->setUhidDestroyData(2);
++    postControlMsg(destroy);
++    m_mousePassthroughDeviceCreated = false;
++    m_mousePassthroughFrameSize = QSize();
++}
++
+ void Controller::postBackOrScreenOn(bool down)
+ {
+     ControlMsg *controlMsg = new ControlMsg(ControlMsg::CMT_BACK_OR_SCREEN_ON);
+@@ -275,6 +472,13 @@ void Controller::setDisplayPower(bool on)
+     postControlMsg(controlMsg);
+ }
+ 
++void Controller::setVideoPaused(bool paused)
++{
++    ControlMsg *controlMsg = new ControlMsg(ControlMsg::CMT_SET_VIDEO_PAUSED);
++    controlMsg->setVideoPausedData(paused);
++    postControlMsg(controlMsg);
++}
++
+ void Controller::setCameraTorch(bool on)
+ {
+     ControlMsg *controlMsg = new ControlMsg(ControlMsg::CMT_CAMERA_SET_TORCH);
+@@ -294,13 +498,26 @@ void Controller::cameraZoomOut()
+ 
+ void Controller::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize)
+ {
++    if (m_mousePassthrough) {
++        ensureMousePassthroughDevice(frameSize);
++    }
+     if (m_inputConvert) {
+         m_inputConvert->mouseEvent(from, frameSize, showSize);
+     }
+ }
+ 
++void Controller::mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize)
++{
++    if (m_inputConvert) {
++        m_inputConvert->mouseMoveRelative(delta, frameSize, showSize);
++    }
++}
++
+ void Controller::wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize)
+ {
++    if (m_mousePassthrough) {
++        ensureMousePassthroughDevice(frameSize);
++    }
+     if (m_inputConvert) {
+         m_inputConvert->wheelEvent(from, frameSize, showSize);
+     }
+diff --git a/src/device/controller/controller.h b/src/device/controller/controller.h
+index f1b36a7..5b9aa01 100644
+--- a/src/device/controller/controller.h
++++ b/src/device/controller/controller.h
+@@ -44,14 +44,17 @@ public:
+     void scanFile(const QString &path);
+     void resizeDisplay(const QSize &size);
+     void setDisplayPower(bool on);
++    void setVideoPaused(bool paused);
+     void setCameraTorch(bool on);
+     void cameraZoomIn();
+     void cameraZoomOut();
+ 
+     // for input convert
+     void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize);
++    void mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize);
+     void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize);
+     void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize);
++    void setMousePassthrough(bool enabled, bool keepDevice = false);
+ 
+     // turn the screen on if it was off, press BACK otherwise
+     // If the screen is off, it is turned on only on down
+@@ -72,6 +75,8 @@ private:
+     bool sendControl(const QByteArray &buffer);
+     void postKeyCodeClick(AndroidKeycode keycode);
+     void sendPendingResize();
++    void ensureMousePassthroughDevice(const QSize &frameSize);
++    void destroyMousePassthroughDevice();
+ 
+ private:
+     QPointer<Receiver> m_receiver;
+@@ -80,6 +85,9 @@ private:
+     QSize m_pendingResize;
+     bool m_resizeQueued = false;
+     bool m_cameraMode = false;
++    bool m_mousePassthrough = false;
++    bool m_mousePassthroughDeviceCreated = false;
++    QSize m_mousePassthroughFrameSize;
+ };
+ 
+ #endif // CONTROLLER_H
+diff --git a/src/device/controller/inputconvert/controlmsg.cpp b/src/device/controller/inputconvert/controlmsg.cpp
+index 7fb788a..33332ea 100644
+--- a/src/device/controller/inputconvert/controlmsg.cpp
++++ b/src/device/controller/inputconvert/controlmsg.cpp
+@@ -102,6 +102,35 @@ void ControlMsg::setDisplayPowerData(bool on)
+     m_data.setDisplayPower.on = on;
+ }
+ 
++void ControlMsg::setVideoPausedData(bool paused)
++{
++    m_data.setVideoPaused.paused = paused;
++}
++
++void ControlMsg::setUhidCreateData(quint16 id, quint16 vendorId, quint16 productId,
++                                   const QByteArray &name, const QByteArray &reportDesc)
++{
++    m_data.uhidCreate.id = id;
++    m_data.uhidCreate.vendorId = vendorId;
++    m_data.uhidCreate.productId = productId;
++    m_data.uhidCreate.nameSize = static_cast<quint8>(qMin(name.size(), 127));
++    memcpy(m_data.uhidCreate.name, name.constData(), m_data.uhidCreate.nameSize);
++    m_data.uhidCreate.reportDescSize = static_cast<quint16>(qMin(reportDesc.size(), 256));
++    memcpy(m_data.uhidCreate.reportDesc, reportDesc.constData(), m_data.uhidCreate.reportDescSize);
++}
++
++void ControlMsg::setUhidInputData(quint16 id, const QByteArray &data)
++{
++    m_data.uhidInput.id = id;
++    m_data.uhidInput.size = static_cast<quint16>(qMin(data.size(), 64));
++    memcpy(m_data.uhidInput.data, data.constData(), m_data.uhidInput.size);
++}
++
++void ControlMsg::setUhidDestroyData(quint16 id)
++{
++    m_data.uhidDestroy.id = id;
++}
++
+ void ControlMsg::setCameraTorchData(bool on)
+ {
+     m_data.cameraTorch.on = on;
+@@ -225,6 +254,26 @@ QByteArray ControlMsg::serializeData()
+     case CMT_SET_DISPLAY_POWER:
+         buffer.putChar(m_data.setDisplayPower.on);
+         break;
++    case CMT_SET_VIDEO_PAUSED:
++        buffer.putChar(m_data.setVideoPaused.paused);
++        break;
++    case CMT_UHID_CREATE:
++        BufferUtil::write16(buffer, m_data.uhidCreate.id);
++        BufferUtil::write16(buffer, m_data.uhidCreate.vendorId);
++        BufferUtil::write16(buffer, m_data.uhidCreate.productId);
++        buffer.putChar(m_data.uhidCreate.nameSize);
++        buffer.write(m_data.uhidCreate.name, m_data.uhidCreate.nameSize);
++        BufferUtil::write16(buffer, m_data.uhidCreate.reportDescSize);
++        buffer.write(m_data.uhidCreate.reportDesc, m_data.uhidCreate.reportDescSize);
++        break;
++    case CMT_UHID_INPUT:
++        BufferUtil::write16(buffer, m_data.uhidInput.id);
++        BufferUtil::write16(buffer, m_data.uhidInput.size);
++        buffer.write(m_data.uhidInput.data, m_data.uhidInput.size);
++        break;
++    case CMT_UHID_DESTROY:
++        BufferUtil::write16(buffer, m_data.uhidDestroy.id);
++        break;
+     case CMT_CAMERA_SET_TORCH:
+         buffer.putChar(m_data.cameraTorch.on);
+         break;
+diff --git a/src/device/controller/inputconvert/controlmsg.h b/src/device/controller/inputconvert/controlmsg.h
+index 9c00133..313f27d 100644
+--- a/src/device/controller/inputconvert/controlmsg.h
++++ b/src/device/controller/inputconvert/controlmsg.h
+@@ -44,6 +44,9 @@ public:
+         CMT_SET_CLIPBOARD,
+         CMT_SET_DISPLAY_POWER,
+         CMT_ROTATE_DEVICE,
++        CMT_UHID_CREATE,
++        CMT_UHID_INPUT,
++        CMT_UHID_DESTROY,
+         CMT_OPEN_HARD_KEYBOARD_SETTINGS = 15,
+         CMT_START_APP,
+         CMT_RESET_VIDEO,
+@@ -52,6 +55,7 @@ public:
+         CMT_CAMERA_ZOOM_OUT = 20,
+         CMT_RESIZE_DISPLAY,
+         CMT_SCAN_FILE,
++        CMT_SET_VIDEO_PAUSED,
+     };
+ 
+     enum GetClipboardCopyKey {
+@@ -79,6 +83,11 @@ public:
+     void setGetClipboardMsgData(ControlMsg::GetClipboardCopyKey copyKey); 
+     void setSetClipboardMsgData(QString &text, bool paste);
+     void setDisplayPowerData(bool on);
++    void setVideoPausedData(bool paused);
++    void setUhidCreateData(quint16 id, quint16 vendorId, quint16 productId,
++                           const QByteArray &name, const QByteArray &reportDesc);
++    void setUhidInputData(quint16 id, const QByteArray &data);
++    void setUhidDestroyData(quint16 id);
+     void setBackOrScreenOnData(bool down);
+     void setCameraTorchData(bool on);
+     void setStartAppData(const QString &name);
+@@ -146,6 +155,30 @@ private:
+                 bool on;
+             } setDisplayPower;
+             struct
++            {
++                bool paused;
++            } setVideoPaused;
++            struct
++            {
++                quint16 id;
++                quint16 vendorId;
++                quint16 productId;
++                quint8 nameSize;
++                char name[127];
++                quint16 reportDescSize;
++                char reportDesc[256];
++            } uhidCreate;
++            struct
++            {
++                quint16 id;
++                quint16 size;
++                char data[64];
++            } uhidInput;
++            struct
++            {
++                quint16 id;
++            } uhidDestroy;
++            struct
+             {
+                 bool on;
+             } cameraTorch;
+diff --git a/src/device/controller/inputconvert/inputconvertbase.h b/src/device/controller/inputconvert/inputconvertbase.h
+index d9f8dc5..9896339 100644
+--- a/src/device/controller/inputconvert/inputconvertbase.h
++++ b/src/device/controller/inputconvert/inputconvertbase.h
+@@ -4,6 +4,7 @@
+ #include <QKeyEvent>
+ #include <QMouseEvent>
+ #include <QPointer>
++#include <QSize>
+ #include <QWheelEvent>
+ 
+ #include "controlmsg.h"
+@@ -19,8 +20,19 @@ public:
+     // the frame size may be different from the real device size, so we need the size
+     // to which the absolute position apply, to scale it accordingly
+     virtual void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
++    virtual void mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize)
++    {
++        Q_UNUSED(delta);
++        Q_UNUSED(frameSize);
++        Q_UNUSED(showSize);
++    }
+     virtual void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
+     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) = 0;
++    virtual void setMousePassthrough(bool enabled, const QSize &pointerRange = QSize())
++    {
++        Q_UNUSED(enabled);
++        Q_UNUSED(pointerRange);
++    }
+     virtual bool isCurrentCustomKeymap()
+     {
+         return false;
+diff --git a/src/device/controller/inputconvert/inputconvertgame.cpp b/src/device/controller/inputconvert/inputconvertgame.cpp
+index 49a0eaf..37f9975 100644
+--- a/src/device/controller/inputconvert/inputconvertgame.cpp
++++ b/src/device/controller/inputconvert/inputconvertgame.cpp
+@@ -13,10 +13,34 @@
+ 
+ #define CURSOR_POS_CHECK 50
+ 
++namespace {
++constexpr int FPS_TOUCH_INTERVAL_MS = 4;
++constexpr int FPS_TOUCH_MAX_BOUNDARY_SPLITS = 16;
++constexpr qreal FPS_TOUCH_SAFE_MIN = 0.05;
++constexpr qreal FPS_TOUCH_SAFE_MAX = 0.95;
++constexpr qreal FPS_TOUCH_DELTA_EPSILON = 0.0000001;
++
++bool isTinyDelta(const QPointF &delta)
++{
++    return qAbs(delta.x()) < FPS_TOUCH_DELTA_EPSILON
++            && qAbs(delta.y()) < FPS_TOUCH_DELTA_EPSILON;
++}
++}
++
+ InputConvertGame::InputConvertGame(Controller *controller) : InputConvertNormal(controller) {
+     m_ctrlSteerWheel.delayData.timer = new QTimer(this);
+     m_ctrlSteerWheel.delayData.timer->setSingleShot(true);
+     connect(m_ctrlSteerWheel.delayData.timer, &QTimer::timeout, this, &InputConvertGame::onSteerWheelTimer);
++
++    // A high-polling-rate mouse may report at 500/1000 Hz. Coalesce reports
++    // into one newest Android MOVE every 4 ms so the camera receives up to
++    // 250 updates/s without building an ever-growing Qt/TCP event backlog.
++    m_ctrlMouseMove.flushTimer = new QTimer(this);
++    m_ctrlMouseMove.flushTimer->setSingleShot(true);
++    m_ctrlMouseMove.flushTimer->setTimerType(Qt::PreciseTimer);
++    m_ctrlMouseMove.flushTimer->setInterval(FPS_TOUCH_INTERVAL_MS);
++    connect(m_ctrlMouseMove.flushTimer, &QTimer::timeout,
++            this, &InputConvertGame::flushPendingMouseMoveDelta);
+ }
+ 
+ InputConvertGame::~InputConvertGame() {}
+@@ -42,14 +66,34 @@ void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSiz
+                 return;
+             }
+         }
+-        // mouse click
+-        if (processMouseClick(from)) {
+-            return;
++        // Preserve ordering between a final coalesced camera delta and a fire
++        // button press/release that arrives inside the same 4 ms window.
++        if (!isTinyDelta(m_ctrlMouseMove.pendingDelta)) {
++            m_ctrlMouseMove.flushTimer->stop();
++            flushPendingMouseMoveDelta();
+         }
++        // mouse click
++        processMouseClick(from);
++
++        // FPS mode is an exclusive, direct keymap path. Even an unmapped mouse
++        // event is consumed here instead of falling through to normal touch or
++        // the UHID pointer bridge.
++        return;
+     }
+     InputConvertNormal::mouseEvent(from, frameSize, showSize);
+ }
+ 
++void InputConvertGame::mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize)
++{
++    if (!m_gameMap || m_needBackMouseMove || !m_processMouseMove
++            || !m_keyMap.isValidMouseMoveMap() || isTinyDelta(delta)) {
++        return;
++    }
++
++    updateSize(frameSize, showSize);
++    queueMouseMoveDelta(delta);
++}
++
+ void InputConvertGame::wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize)
+ {
+     if (m_gameMap) {
+@@ -66,6 +110,7 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
+         if (QEvent::KeyPress != from->type()) {
+             return;
+         }
++        updateSize(frameSize, showSize);
+         if (!switchGameMap()) {
+             m_needBackMouseMove = false;
+         }
+@@ -92,18 +137,19 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
+             m_ctrlMouseMove.smallEyes = (QEvent::KeyPress == from->type());
+ 
+             if (QEvent::KeyPress == from->type()) {
++                m_ctrlMouseMove.flushTimer->stop();
++                m_ctrlMouseMove.pendingDelta = QPointF();
+                 m_processMouseMove = false;
+-                int delay = 30;
+-                QTimer::singleShot(delay, this, [this]() { mouseMoveStopTouch(); });
+-                QTimer::singleShot(delay * 2, this, [this]() {
+-                    mouseMoveStartTouch(nullptr);
+-                    m_processMouseMove = true;
+-                });
+-
++                scheduleMouseMoveTouchRestart(30);
+                 stopMouseMoveTimer();
+             } else {
++                // Cancel the delayed restart scheduled by KeyPress. Otherwise
++                // a quick release can restart the camera touch again 30/60 ms
++                // later and make the FPS response feel intermittent.
++                ++m_mouseMoveRestartEpoch;
+                 mouseMoveStopTouch();
+                 mouseMoveStartTouch(nullptr);
++                m_processMouseMove = true;
+             }
+             return;
+         }
+@@ -204,7 +250,7 @@ void InputConvertGame::sendTouchEvent(int id, QPointF pos, AndroidMotioneventAct
+         static_cast<AndroidMotioneventButtons>(0),
+         static_cast<AndroidMotioneventButtons>(0),
+         QRect(absolutePos, m_frameSize),
+-        AMOTION_EVENT_ACTION_DOWN == action ? 1.0f : 0.0f);
++        AMOTION_EVENT_ACTION_UP == action ? 0.0f : 1.0f);
+     sendControlMsg(controlMsg);
+ }
+ 
+@@ -581,47 +627,139 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
+     m_ctrlMouseMove.lastPos = from->position();
+ #endif
+ 
+-    if (m_ctrlMouseMove.ignoreCount > 0) {
+-        --m_ctrlMouseMove.ignoreCount;
+-        return true;
+-    }
+-
+     if (!lastPos.isNull() && m_processMouseMove) {
+ #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+         QPointF distance_raw{from->localPos() - lastPos};
+ #else
+         QPointF distance_raw{from->position() - lastPos};
+ #endif
+-        QPointF speedRatio  {m_keyMap.getMouseMoveMap().data.mouseMove.speedRatio};
+-        QPointF distance    {distance_raw.x() / speedRatio.x(), distance_raw.y() / speedRatio.y()};
++        queueMouseMoveDelta(distance_raw);
++    }
+ 
+-        mouseMoveStartTouch(from);
+-        startMouseMoveTimer();
++    return true;
++}
+ 
+-        m_ctrlMouseMove.lastConverPos.setX(m_ctrlMouseMove.lastConverPos.x() + distance.x() / m_showSize.width());
+-        m_ctrlMouseMove.lastConverPos.setY(m_ctrlMouseMove.lastConverPos.y() + distance.y() / m_showSize.height());
++void InputConvertGame::queueMouseMoveDelta(const QPointF &delta)
++{
++    if (!m_ctrlMouseMove.flushTimer || isTinyDelta(delta)) {
++        return;
++    }
+ 
+-        if (m_ctrlMouseMove.lastConverPos.x() < 0.05 || m_ctrlMouseMove.lastConverPos.x() > 0.95 || m_ctrlMouseMove.lastConverPos.y() < 0.05
+-            || m_ctrlMouseMove.lastConverPos.y() > 0.95) {
+-            if (m_ctrlMouseMove.smallEyes) {
+-                m_processMouseMove = false;
+-                int delay = 30;
+-                QTimer::singleShot(delay, this, [this]() { mouseMoveStopTouch(); });
+-                QTimer::singleShot(delay * 2, this, [this]() {
+-                    mouseMoveStartTouch(nullptr);
+-                    m_processMouseMove = true;
+-                });
+-            } else {
+-                mouseMoveStopTouch();
+-                m_ctrlMouseMove.ignoreCount = 5;
+-                return true;
+-            }
++    m_ctrlMouseMove.pendingDelta += delta;
++    if (!m_ctrlMouseMove.flushTimer->isActive()) {
++        // Send the first report immediately for minimum input-to-camera
++        // latency, then rate-limit only the following reports in this burst.
++        const QPointF immediateDelta = m_ctrlMouseMove.pendingDelta;
++        m_ctrlMouseMove.pendingDelta = QPointF();
++        applyMouseMoveDelta(immediateDelta);
++        m_ctrlMouseMove.flushTimer->start();
++    }
++}
++
++void InputConvertGame::flushPendingMouseMoveDelta()
++{
++    if (!m_gameMap || m_needBackMouseMove || !m_processMouseMove) {
++        m_ctrlMouseMove.pendingDelta = QPointF();
++        return;
++    }
++
++    if (isTinyDelta(m_ctrlMouseMove.pendingDelta)) {
++        m_ctrlMouseMove.pendingDelta = QPointF();
++        return;
++    }
++
++    const QPointF delta = m_ctrlMouseMove.pendingDelta;
++    m_ctrlMouseMove.pendingDelta = QPointF();
++    applyMouseMoveDelta(delta);
++    m_ctrlMouseMove.flushTimer->start();
++}
++
++void InputConvertGame::applyMouseMoveDelta(const QPointF &delta)
++{
++    if (!m_processMouseMove || m_showSize.width() <= 0 || m_showSize.height() <= 0) {
++        return;
++    }
++
++    const QPointF speedRatio = m_keyMap.getMouseMoveMap().data.mouseMove.speedRatio;
++    if (qAbs(speedRatio.x()) < FPS_TOUCH_DELTA_EPSILON
++            || qAbs(speedRatio.y()) < FPS_TOUCH_DELTA_EPSILON) {
++        return;
++    }
++
++    mouseMoveStartTouch(nullptr);
++    startMouseMoveTimer();
++
++    const QPointF normalizedDelta(delta.x() / speedRatio.x() / m_showSize.width(),
++                                  delta.y() / speedRatio.y() / m_showSize.height());
++    applyNormalizedMouseMoveDelta(normalizedDelta);
++}
++
++void InputConvertGame::applyNormalizedMouseMoveDelta(QPointF delta)
++{
++    // Preserve the whole relative delta when the simulated finger reaches a
++    // safe screen edge. The old code released the finger and discarded the
++    // current report plus the next five reports, which produced a visible
++    // pause during fast 180/360-degree turns.
++    for (int split = 0; split < FPS_TOUCH_MAX_BOUNDARY_SPLITS && !isTinyDelta(delta); ++split) {
++        const QPointF current = m_ctrlMouseMove.lastConverPos;
++        const QPointF target = current + delta;
++        const bool targetInside = target.x() >= FPS_TOUCH_SAFE_MIN
++                && target.x() <= FPS_TOUCH_SAFE_MAX
++                && target.y() >= FPS_TOUCH_SAFE_MIN
++                && target.y() <= FPS_TOUCH_SAFE_MAX;
++
++        if (targetInside) {
++            m_ctrlMouseMove.lastConverPos = target;
++            sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), target);
++            return;
++        }
++
++        qreal fraction = 1.0;
++        if (delta.x() > 0.0 && target.x() > FPS_TOUCH_SAFE_MAX) {
++            fraction = qMin(fraction, (FPS_TOUCH_SAFE_MAX - current.x()) / delta.x());
++        } else if (delta.x() < 0.0 && target.x() < FPS_TOUCH_SAFE_MIN) {
++            fraction = qMin(fraction, (FPS_TOUCH_SAFE_MIN - current.x()) / delta.x());
++        }
++        if (delta.y() > 0.0 && target.y() > FPS_TOUCH_SAFE_MAX) {
++            fraction = qMin(fraction, (FPS_TOUCH_SAFE_MAX - current.y()) / delta.y());
++        } else if (delta.y() < 0.0 && target.y() < FPS_TOUCH_SAFE_MIN) {
++            fraction = qMin(fraction, (FPS_TOUCH_SAFE_MIN - current.y()) / delta.y());
++        }
++        fraction = qBound<qreal>(0.0, fraction, 1.0);
++
++        QPointF edge = current + delta * fraction;
++        edge.setX(qBound<qreal>(FPS_TOUCH_SAFE_MIN, edge.x(), FPS_TOUCH_SAFE_MAX));
++        edge.setY(qBound<qreal>(FPS_TOUCH_SAFE_MIN, edge.y(), FPS_TOUCH_SAFE_MAX));
++        m_ctrlMouseMove.lastConverPos = edge;
++        sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), edge);
++
++        if (m_ctrlMouseMove.smallEyes) {
++            // Keep the keymap's original small-eyes release/restart gesture;
++            // only normal FPS camera movement uses the immediate handoff.
++            m_ctrlMouseMove.pendingDelta = QPointF();
++            m_processMouseMove = false;
++            scheduleMouseMoveTouchRestart(30);
++            return;
+         }
+ 
+-        sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), m_ctrlMouseMove.lastConverPos);
++        delta *= (1.0 - fraction);
++        mouseMoveStopTouch();
++        if (isTinyDelta(delta)) {
++            return;
++        }
++
++        // Start a fresh finger at the configured camera origin, then consume
++        // the unprocessed remainder in the same input update.
++        mouseMoveStartTouch(nullptr);
+     }
+ 
+-    return true;
++    if (!isTinyDelta(delta)) {
++        QPointF finalPos = m_ctrlMouseMove.lastConverPos + delta;
++        finalPos.setX(qBound<qreal>(FPS_TOUCH_SAFE_MIN, finalPos.x(), FPS_TOUCH_SAFE_MAX));
++        finalPos.setY(qBound<qreal>(FPS_TOUCH_SAFE_MIN, finalPos.y(), FPS_TOUCH_SAFE_MAX));
++        m_ctrlMouseMove.lastConverPos = finalPos;
++        sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), finalPos);
++    }
+ }
+ 
+ bool InputConvertGame::checkCursorPos(const QMouseEvent *from)
+@@ -712,10 +850,47 @@ void InputConvertGame::stopMouseMoveTimer()
+     }
+ }
+ 
++void InputConvertGame::scheduleMouseMoveTouchRestart(int delayMs)
++{
++    const quint64 epoch = ++m_mouseMoveRestartEpoch;
++    QTimer::singleShot(delayMs, this, [this, epoch]() {
++        if (m_gameMap && epoch == m_mouseMoveRestartEpoch) {
++            mouseMoveStopTouch();
++        }
++    });
++    QTimer::singleShot(delayMs * 2, this, [this, epoch]() {
++        if (m_gameMap && epoch == m_mouseMoveRestartEpoch) {
++            mouseMoveStartTouch(nullptr);
++            m_processMouseMove = true;
++        }
++    });
++}
++
++void InputConvertGame::resetMouseMoveForModeSwitch()
++{
++    // Invalidate delayed small-eyes callbacks from the previous mode before
++    // they can inject a late touch into pointer mode or a new FPS session.
++    ++m_mouseMoveRestartEpoch;
++    if (m_ctrlMouseMove.flushTimer) {
++        m_ctrlMouseMove.flushTimer->stop();
++    }
++    m_ctrlMouseMove.pendingDelta = QPointF();
++    stopMouseMoveTimer();
++    mouseMoveStopTouch();
++    m_ctrlMouseMove.lastPos = QPointF();
++    m_ctrlMouseMove.lastConverPos = QPointF();
++    m_ctrlMouseMove.smallEyes = false;
++    m_processMouseMove = true;
++}
++
+ bool InputConvertGame::switchGameMap()
+ {
+     m_gameMap = !m_gameMap;
++    resetMouseMoveForModeSwitch();
+     qInfo() << QString("current keymap mode: %1").arg(m_gameMap ? "custom" : "normal");
++    if (m_gameMap) {
++        qInfo() << "FPS mouse route: direct keymap touch injection (UHID bypassed)";
++    }
+ 
+     if (!m_keyMap.isValidMouseMoveMap()) {
+         return m_gameMap;
+@@ -726,11 +901,6 @@ bool InputConvertGame::switchGameMap()
+ #endif
+     hideMouseCursor(m_gameMap);
+ 
+-    if (!m_gameMap) {
+-        stopMouseMoveTimer();
+-        mouseMoveStopTouch();
+-    }
+-
+     return m_gameMap;
+ }
+ 
+diff --git a/src/device/controller/inputconvert/inputconvertgame.h b/src/device/controller/inputconvert/inputconvertgame.h
+index a870edb..04c880d 100644
+--- a/src/device/controller/inputconvert/inputconvertgame.h
++++ b/src/device/controller/inputconvert/inputconvertgame.h
+@@ -16,6 +16,7 @@ public:
+     virtual ~InputConvertGame();
+ 
+     virtual void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize);
++    virtual void mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize) override;
+     virtual void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize);
+     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize);
+     virtual bool isCurrentCustomKeymap();
+@@ -55,11 +56,17 @@ protected:
+     // mouse
+     bool processMouseClick(const QMouseEvent *from);
+     bool processMouseMove(const QMouseEvent *from);
++    void queueMouseMoveDelta(const QPointF &delta);
++    void flushPendingMouseMoveDelta();
++    void applyMouseMoveDelta(const QPointF &delta);
++    void applyNormalizedMouseMoveDelta(QPointF delta);
+     void moveCursorTo(const QMouseEvent *from, const QPoint &localPosPixel);
+     void mouseMoveStartTouch(const QMouseEvent *from);
+     void mouseMoveStopTouch();
+     void startMouseMoveTimer();
+     void stopMouseMoveTimer();
++    void scheduleMouseMoveTouchRestart(int delayMs);
++    void resetMouseMoveForModeSwitch();
+ 
+     bool switchGameMap();
+     bool checkCursorPos(const QMouseEvent *from);
+@@ -86,6 +93,7 @@ private:
+     KeyMap m_keyMap;
+ 
+     bool m_processMouseMove = true;
++    quint64 m_mouseMoveRestartEpoch = 0;
+ 
+     // steer wheel
+     struct
+@@ -115,7 +123,8 @@ private:
+         bool touching = false;
+         int timer = 0;
+         bool smallEyes = false;
+-        int ignoreCount = 0;
++        QPointF pendingDelta;
++        QTimer *flushTimer = nullptr;
+     } m_ctrlMouseMove;
+ 
+     // for drag delay
+diff --git a/src/device/controller/inputconvert/inputconvertnormal.cpp b/src/device/controller/inputconvert/inputconvertnormal.cpp
+index 4cdd937..84b106e 100644
+--- a/src/device/controller/inputconvert/inputconvertnormal.cpp
++++ b/src/device/controller/inputconvert/inputconvertnormal.cpp
+@@ -4,16 +4,273 @@
+ #include "inputconvertnormal.h"
+ #include "controller.h"
+ 
+-InputConvertNormal::InputConvertNormal(Controller *controller) : InputConvertBase(controller) {}
++namespace {
++// UHID input is consumed by InputReader while SDK touch injection goes directly
++// to InputDispatcher. Give Android more than one 60 Hz input cycle to observe
++// the drawing-tablet HOVER_EXIT before starting the finger stream.
++constexpr int UHID_HOVER_EXIT_SETTLE_MS = 24;
++constexpr int UHID_MIN_TAP_DURATION_MS = 8;
++}
++
++InputConvertNormal::InputConvertNormal(Controller *controller) : InputConvertBase(controller)
++{
++    m_uhidTouchStartTimer.setSingleShot(true);
++    m_uhidTouchReleaseTimer.setSingleShot(true);
++    connect(&m_uhidTouchStartTimer, &QTimer::timeout,
++            this, &InputConvertNormal::sendPendingUhidTouchDown);
++    connect(&m_uhidTouchReleaseTimer, &QTimer::timeout,
++            this, &InputConvertNormal::sendPendingUhidTouchUp);
++}
+ 
+ InputConvertNormal::~InputConvertNormal() {}
+ 
++void InputConvertNormal::setMousePassthrough(bool enabled, const QSize &pointerRange)
++{
++    m_uhidTouchStartTimer.stop();
++    m_uhidTouchReleaseTimer.stop();
++    if (!enabled && m_uhidTouching && !m_uhidLastFrameSize.isEmpty()) {
++        sendUhidTouch(AMOTION_EVENT_ACTION_UP, m_uhidLastTouchPos, m_uhidLastFrameSize);
++    }
++    if (!enabled && !m_uhidLastFrameSize.isEmpty()) {
++        // Leave proximity before the UHID device is destroyed so Android can
++        // close the drawing-tablet hover stream cleanly.
++        sendUhidPointerInput(0, m_uhidLastTouchPos, m_uhidLastFrameSize, 0, 0, false);
++    }
++    m_mousePassthrough = enabled;
++    m_uhidPointerRange = enabled ? pointerRange : QSize();
++    m_uhidButtonState = 0;
++    m_uhidTouching = false;
++    m_uhidTouchPressPending = false;
++    m_uhidTouchReleasePending = false;
++}
++
++quint8 InputConvertNormal::convertUhidMouseButton(Qt::MouseButton button) const
++{
++    switch (button) {
++    case Qt::LeftButton:
++        return 1U << 0;
++    case Qt::RightButton:
++        return 1U << 1;
++#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
++    case Qt::MiddleButton:
++#else
++    case Qt::MidButton:
++#endif
++        return 1U << 2;
++    case Qt::XButton1:
++        return 1U << 3;
++    case Qt::XButton2:
++        return 1U << 4;
++    default:
++        return 0;
++    }
++}
++
++void InputConvertNormal::sendUhidPointerInput(quint8 buttonBits, const QPoint &pos, const QSize &frameSize,
++                                              int vScroll, int hScroll, bool inRange)
++{
++    if (frameSize.isEmpty()) {
++        return;
++    }
++
++    // Android treats a HID digitizer with INPUT_PROP_POINTER and a stylus tool
++    // as a drawing tablet. Its raw hover stream goes through InputReader and
++    // PointerChoreographer, which keeps the real system mouse arrow visible and
++    // places it at these absolute coordinates. A synthetic SOURCE_MOUSE hover
++    // is delivered only to apps and cannot update that system-owned cursor.
++    const QSize pointerRange = m_uhidPointerRange.isEmpty() ? frameSize : m_uhidPointerRange;
++    const quint16 hidMaxX = static_cast<quint16>(qBound(1, pointerRange.width() - 1, 0xffff));
++    const quint16 hidMaxY = static_cast<quint16>(qBound(1, pointerRange.height() - 1, 0xffff));
++    const auto toHidCoordinate = [](int value, int extent, quint16 hidMaximum) -> quint16 {
++        if (extent <= 1 || !hidMaximum) {
++            return 0;
++        }
++        const int clamped = qBound(0, value, extent - 1);
++        return static_cast<quint16>(qRound64(static_cast<double>(clamped)
++                                             * hidMaximum / (extent - 1)));
++    };
++
++    const quint16 x = toHidCoordinate(pos.x(), frameSize.width(), hidMaxX);
++    const quint16 y = toHidCoordinate(pos.y(), frameSize.height(), hidMaxY);
++
++    // Report layout defined by Controller's drawing-tablet descriptor:
++    // proximity/tip, absolute X, absolute Y, five buttons, wheel and AC Pan.
++    QByteArray report;
++    report.reserve(8);
++    report.append(static_cast<char>(inRange ? 0x02 : 0x00)); // Tip=0, InRange=1
++    report.append(static_cast<char>(x & 0xff));
++    report.append(static_cast<char>((x >> 8) & 0xff));
++    report.append(static_cast<char>(y & 0xff));
++    report.append(static_cast<char>((y >> 8) & 0xff));
++    report.append(static_cast<char>(buttonBits));
++    report.append(static_cast<char>(static_cast<qint8>(qBound(-127, vScroll, 127))));
++    report.append(static_cast<char>(static_cast<qint8>(qBound(-127, hScroll, 127))));
++
++    ControlMsg *controlMsg = new ControlMsg(ControlMsg::CMT_UHID_INPUT);
++    controlMsg->setUhidInputData(2, report);
++    sendControlMsg(controlMsg);
++}
++
++void InputConvertNormal::sendUhidTouch(AndroidMotioneventAction action, const QPoint &pos, const QSize &frameSize)
++{
++    if (frameSize.isEmpty()) {
++        return;
++    }
++    ControlMsg *controlMsg = new ControlMsg(ControlMsg::CMT_INJECT_TOUCH);
++    controlMsg->setInjectTouchMsgData(
++        static_cast<quint64>(POINTER_ID_GENERIC_FINGER),
++        action,
++        static_cast<AndroidMotioneventButtons>(0),
++        static_cast<AndroidMotioneventButtons>(0),
++        QRect(pos, frameSize),
++        action == AMOTION_EVENT_ACTION_UP ? 0.0f : 1.0f);
++    sendControlMsg(controlMsg);
++}
++
++void InputConvertNormal::sendPendingUhidTouchDown()
++{
++    if (!m_mousePassthrough || !m_uhidTouchPressPending
++            || m_uhidTouchDownFrameSize.isEmpty()) {
++        m_uhidTouchPressPending = false;
++        m_uhidTouchReleasePending = false;
++        return;
++    }
++
++    m_uhidTouchPressPending = false;
++    sendUhidTouch(AMOTION_EVENT_ACTION_DOWN, m_uhidTouchDownPos, m_uhidTouchDownFrameSize);
++    m_uhidTouching = true;
++
++    // Very short desktop clicks may be released before the hover-exit timer
++    // fires. Still emit a valid DOWN/UP pair with a small minimum duration.
++    if (m_uhidTouchReleasePending) {
++        m_uhidTouchReleasePending = false;
++        m_uhidTouchReleaseTimer.start(UHID_MIN_TAP_DURATION_MS);
++    }
++}
++
++void InputConvertNormal::sendPendingUhidTouchUp()
++{
++    if (!m_mousePassthrough || !m_uhidTouching) {
++        return;
++    }
++
++    if (!m_uhidLastFrameSize.isEmpty()) {
++        sendUhidTouch(AMOTION_EVENT_ACTION_UP, m_uhidLastTouchPos, m_uhidLastFrameSize);
++    }
++    m_uhidTouching = false;
++
++    // Re-enter proximity only after the finger stream is complete. This keeps
++    // Android 16 from rejecting the click while restoring the system pointer
++    // at exactly the release position.
++    if (!m_uhidLastFrameSize.isEmpty()) {
++        sendUhidPointerInput(m_uhidButtonState, m_uhidLastTouchPos,
++                             m_uhidLastFrameSize, 0, 0, true);
++    }
++}
++
++QPoint InputConvertNormal::mapToVideoFrame(const QPoint &pos, const QSize &frameSize, const QSize &showSize) const
++{
++    if (frameSize.isEmpty() || showSize.isEmpty()) {
++        return QPoint();
++    }
++
++    const QPoint clampedPos(
++        qBound(0, pos.x(), showSize.width() - 1),
++        qBound(0, pos.y(), showSize.height() - 1));
++
++    // Use endpoint-preserving scaling. frameSize is supplied by the current
++    // video session and changes automatically after rotation or display resize.
++    // The Android server then maps this video coordinate to the physical panel
++    // (for example 2136x3200), including capture scaling and rotation.
++    const int x = showSize.width() > 1 && frameSize.width() > 1
++        ? static_cast<int>(qRound64(static_cast<double>(clampedPos.x())
++                                   * (frameSize.width() - 1) / (showSize.width() - 1)))
++        : 0;
++    const int y = showSize.height() > 1 && frameSize.height() > 1
++        ? static_cast<int>(qRound64(static_cast<double>(clampedPos.y())
++                                   * (frameSize.height() - 1) / (showSize.height() - 1)))
++        : 0;
++    return QPoint(x, y);
++}
++
+ void InputConvertNormal::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize)
+ {
+     if (!from) {
+         return;
+     }
+ 
++    if (m_mousePassthrough) {
++        if (showSize.isEmpty() || frameSize.isEmpty()) {
++            return;
++        }
++#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
++        const QPoint pos = from->localPos().toPoint();
++#else
++        const QPoint pos = from->position().toPoint();
++#endif
++        const QPoint touchPos = mapToVideoFrame(pos, frameSize, showSize);
++        m_uhidLastTouchPos = touchPos;
++        m_uhidLastFrameSize = frameSize;
++
++        switch (from->type()) {
++        case QEvent::MouseMove: {
++            if (m_uhidTouching) {
++                sendUhidTouch(AMOTION_EVENT_ACTION_MOVE, touchPos, frameSize);
++            } else if (!m_uhidTouchPressPending) {
++                sendUhidPointerInput(m_uhidButtonState, touchPos, frameSize, 0, 0);
++            }
++            return;
++        }
++        case QEvent::MouseButtonPress:
++        case QEvent::MouseButtonDblClick: {
++            if (from->button() == Qt::LeftButton) {
++                if (!m_uhidTouching && !m_uhidTouchPressPending) {
++                    // Android 16 may reject a touchscreen DOWN while another
++                    // pointer source still owns an active hover stream (the
++                    // same upstream symptom is fixed by --no-mouse-hover).
++                    // End stylus proximity first, then start the known-working
++                    // generic-finger click after InputReader has consumed it.
++                    sendUhidPointerInput(0, touchPos, frameSize, 0, 0, false);
++                    m_uhidTouchDownPos = touchPos;
++                    m_uhidTouchDownFrameSize = frameSize;
++                    m_uhidTouchPressPending = true;
++                    m_uhidTouchReleasePending = false;
++                    m_uhidTouchStartTimer.start(UHID_HOVER_EXIT_SETTLE_MS);
++                }
++            } else {
++                m_uhidButtonState |= convertUhidMouseButton(from->button());
++                if (!m_uhidTouching && !m_uhidTouchPressPending) {
++                    sendUhidPointerInput(m_uhidButtonState, touchPos, frameSize, 0, 0);
++                }
++            }
++            return;
++        }
++        case QEvent::MouseButtonRelease:
++            if (from->button() == Qt::LeftButton) {
++                if (m_uhidTouching) {
++                    m_uhidTouchReleaseTimer.stop();
++                    sendUhidTouch(AMOTION_EVENT_ACTION_UP, touchPos, frameSize);
++                    m_uhidTouching = false;
++                    sendUhidPointerInput(m_uhidButtonState, touchPos, frameSize, 0, 0, true);
++                } else if (m_uhidTouchPressPending) {
++                    // The DOWN will be sent after HOVER_EXIT settles; defer its
++                    // matching UP so even a fast click remains a valid tap.
++                    m_uhidTouchReleasePending = true;
++                } else {
++                    sendUhidPointerInput(m_uhidButtonState, touchPos, frameSize, 0, 0, true);
++                }
++            } else {
++                m_uhidButtonState &= static_cast<quint8>(~convertUhidMouseButton(from->button()));
++                if (!m_uhidTouching && !m_uhidTouchPressPending) {
++                    sendUhidPointerInput(m_uhidButtonState, touchPos, frameSize, 0, 0);
++                }
++            }
++            return;
++        default:
++            return;
++        }
++    }
++
+     // action
+     AndroidMotioneventAction action;
+     switch (from->type()) {
+@@ -24,7 +281,7 @@ void InputConvertNormal::mouseEvent(const QMouseEvent *from, const QSize &frameS
+         action = AMOTION_EVENT_ACTION_UP;
+         break;
+     case QEvent::MouseMove:
+-        // only support left button drag
++        // Touch mode only needs drags.
+         if (!(from->buttons() & Qt::LeftButton)) {
+             return;
+         }
+@@ -55,7 +312,7 @@ void InputConvertNormal::mouseEvent(const QMouseEvent *from, const QSize &frameS
+         convertMouseButton(from->button()),
+         convertMouseButtons(from->buttons()),
+         QRect(pos.toPoint(), frameSize),
+-        AMOTION_EVENT_ACTION_DOWN == action ? 1.0f : 0.0f);
++        from->buttons() || AMOTION_EVENT_ACTION_DOWN == action ? 1.0f : 0.0f);
+     sendControlMsg(controlMsg);
+ }
+ 
+@@ -65,6 +322,33 @@ void InputConvertNormal::wheelEvent(const QWheelEvent *from, const QSize &frameS
+         return;
+     }
+ 
++    if (m_mousePassthrough) {
++        QPoint pointerPos = m_uhidLastTouchPos;
++        if (!frameSize.isEmpty() && !showSize.isEmpty()) {
++#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
++            const QPoint hoverPos = from->position().toPoint();
++#else
++            const QPoint hoverPos = from->posF().toPoint();
++#endif
++            pointerPos = mapToVideoFrame(hoverPos, frameSize, showSize);
++            m_uhidLastTouchPos = pointerPos;
++            m_uhidLastFrameSize = frameSize;
++        }
++        const QPoint delta = from->angleDelta();
++        int hScroll = delta.x() / 120;
++        int vScroll = delta.y() / 120;
++        if (!hScroll && delta.x()) {
++            hScroll = delta.x() > 0 ? 1 : -1;
++        }
++        if (!vScroll && delta.y()) {
++            vScroll = delta.y() > 0 ? 1 : -1;
++        }
++        if (!m_uhidTouching && !m_uhidTouchPressPending) {
++            sendUhidPointerInput(m_uhidButtonState, pointerPos, frameSize, vScroll, hScroll);
++        }
++        return;
++    }
++
+     // delta
+     float hScroll = from->angleDelta().x() / 64.0f;
+     float vScroll = from->angleDelta().y() / 64.0f;
+diff --git a/src/device/controller/inputconvert/inputconvertnormal.h b/src/device/controller/inputconvert/inputconvertnormal.h
+index 895ac0a..4e87783 100644
+--- a/src/device/controller/inputconvert/inputconvertnormal.h
++++ b/src/device/controller/inputconvert/inputconvertnormal.h
+@@ -1,6 +1,8 @@
+ #ifndef INPUTCONVERT_H
+ #define INPUTCONVERT_H
+ 
++#include <QTimer>
++
+ #include "inputconvertbase.h"
+ 
+ class InputConvertNormal : public InputConvertBase
+@@ -13,12 +15,33 @@ public:
+     virtual void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize);
+     virtual void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize);
+     virtual void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize);
++    void setMousePassthrough(bool enabled, const QSize &pointerRange = QSize()) override;
+ 
+ private:
++    void sendUhidPointerInput(quint8 buttonBits, const QPoint &pos, const QSize &frameSize,
++                              int vScroll, int hScroll, bool inRange = true);
++    void sendUhidTouch(AndroidMotioneventAction action, const QPoint &pos, const QSize &frameSize);
++    void sendPendingUhidTouchDown();
++    void sendPendingUhidTouchUp();
++    QPoint mapToVideoFrame(const QPoint &pos, const QSize &frameSize, const QSize &showSize) const;
++    quint8 convertUhidMouseButton(Qt::MouseButton button) const;
+     AndroidMotioneventButtons convertMouseButtons(Qt::MouseButtons buttonState);
+     AndroidMotioneventButtons convertMouseButton(Qt::MouseButton button);
+     AndroidKeycode convertKeyCode(int key, Qt::KeyboardModifiers modifiers);
+     AndroidMetastate convertMetastate(Qt::KeyboardModifiers modifiers);
++
++    bool m_mousePassthrough = false;
++    QSize m_uhidPointerRange;
++    quint8 m_uhidButtonState = 0;
++    bool m_uhidTouching = false;
++    bool m_uhidTouchPressPending = false;
++    bool m_uhidTouchReleasePending = false;
++    QTimer m_uhidTouchStartTimer;
++    QTimer m_uhidTouchReleaseTimer;
++    QPoint m_uhidTouchDownPos;
++    QSize m_uhidTouchDownFrameSize;
++    QPoint m_uhidLastTouchPos;
++    QSize m_uhidLastFrameSize;
+ };
+ 
+ #endif // INPUTCONVERT_H
+diff --git a/src/device/device.cpp b/src/device/device.cpp
+index 3a897fa..74c7488 100644
+--- a/src/device/device.cpp
++++ b/src/device/device.cpp
+@@ -435,6 +435,13 @@ bool Device::connectDevice()
+     return true;
+ }
+ 
++void Device::setMousePassthrough(bool enabled, bool keepDevice)
++{
++    if (m_controller && !isCameraMode()) {
++        m_controller->setMousePassthrough(enabled, keepDevice);
++    }
++}
++
+ void Device::disconnectDevice()
+ {
+     if (!m_server) {
+@@ -616,6 +623,13 @@ void Device::setDisplayPower(bool on)
+     }
+ }
+ 
++void Device::setVideoPaused(bool paused)
++{
++    if (m_controller) {
++        m_controller->setVideoPaused(paused);
++    }
++}
++
+ void Device::expandNotificationPanel()
+ {
+     if (isCameraMode()) {
+@@ -809,6 +823,14 @@ void Device::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const Q
+     }
+ }
+ 
++void Device::mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize)
++{
++    if (isCameraMode() || !m_controller) {
++        return;
++    }
++    m_controller->mouseMoveRelative(delta, frameSize, showSize);
++}
++
+ void Device::wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize)
+ {
+     if (isCameraMode()) {
+diff --git a/src/device/device.h b/src/device/device.h
+index afb8189..6b04ade 100644
+--- a/src/device/device.h
++++ b/src/device/device.h
+@@ -41,8 +41,10 @@ public:
+ 
+     // key map
+     void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) override;
++    void mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize) override;
+     void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) override;
+     void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) override;
++    void setMousePassthrough(bool enabled, bool keepDevice = false) override;
+ 
+     void postGoBack() override;
+     void postGoHome() override;
+@@ -54,6 +56,7 @@ public:
+     void postCopy() override;
+     void postCut() override;
+     void setDisplayPower(bool on) override;
++    void setVideoPaused(bool paused) override;
+     void expandNotificationPanel() override;
+     void expandSettingsPanel() override;
+     void collapsePanel() override;
+diff --git a/src/device/server/server.cpp b/src/device/server/server.cpp
+index c1aa8d5..0bc88d3 100644
+--- a/src/device/server/server.cpp
++++ b/src/device/server/server.cpp
+@@ -35,6 +35,9 @@ Server::Server(QObject *parent) : QObject(parent)
+         } else {
+             m_controlSocket = tmp;
+             if (m_controlSocket && m_controlSocket->isValid()) {
++                // Camera MOVE packets are tiny and latency-sensitive. Disable
++                // Nagle buffering on the dedicated control channel.
++                m_controlSocket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+                 // we don't need the server socket anymore
+                 // just m_videoSocket is ok
+                 m_serverSocket.close();
+@@ -479,6 +482,7 @@ result:
+         m_videoSocket = videoSocket;
+         // devices will send 1 byte first on tunnel forward mode
+         controlSocket->read(1);
++        controlSocket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+         m_controlSocket = controlSocket;
+         // we don't need the adb tunnel anymore
+         disableTunnelForward();

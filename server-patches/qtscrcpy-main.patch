@@ -1,0 +1,541 @@
+diff --git a/.gitignore b/.gitignore
+index 2311ca4..eaaba79 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -10,8 +10,9 @@
+ /server/gradlew.bat
+ /server/local.properties
+ /build/
++.server-build/
+ build-*
+ *.DS_Store
+ userdata.ini
+ Info_Mac.plist
+-/ci/build_temp
+\ No newline at end of file
++/ci/build_temp
+diff --git a/QtScrcpy/CMakeLists.txt b/QtScrcpy/CMakeLists.txt
+index 67ca863..cc466a2 100755
+--- a/QtScrcpy/CMakeLists.txt
++++ b/QtScrcpy/CMakeLists.txt
+@@ -322,6 +322,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+     get_target_property(QSC_BIN_OUTPUT_PATH ${PROJECT_NAME} RUNTIME_OUTPUT_DIRECTORY)
+     set(QSC_DEPLOY_PATH ${QSC_BIN_OUTPUT_PATH})
+ 
++    # RegisterRawInputDevices/GetRawInputData are provided by User32.
++    target_link_libraries(${PROJECT_NAME} PRIVATE user32)
++
+     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/sndcpy.bat" "${QSC_BIN_OUTPUT_PATH}"
+         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/sndcpy.apk" "${QSC_BIN_OUTPUT_PATH}"
+diff --git a/QtScrcpy/ui/toolform.cpp b/QtScrcpy/ui/toolform.cpp
+index e7b54b7..dde2553 100644
+--- a/QtScrcpy/ui/toolform.cpp
++++ b/QtScrcpy/ui/toolform.cpp
+@@ -46,6 +46,7 @@ void ToolForm::updateCameraMode()
+     ui->expandSettingsBtn->setVisible(!camera);
+     ui->rotateBtn->setVisible(!camera);
+     ui->touchBtn->setVisible(!camera);
++    ui->mousePassthroughBtn->setVisible(!camera);
+     ui->openScreenBtn->setVisible(!camera);
+     ui->closeScreenBtn->setVisible(!camera);
+     ui->powerBtn->setVisible(!camera);
+@@ -79,6 +80,8 @@ void ToolForm::initStyle()
+     IconHelper::Instance()->SetIcon(ui->rotateBtn, QChar(0xf021), 15);
+     IconHelper::Instance()->SetIcon(ui->screenShotBtn, QChar(0xf0c4), 15);
+     IconHelper::Instance()->SetIcon(ui->touchBtn, QChar(0xf111), 15);
++    IconHelper::Instance()->SetIcon(ui->pauseVideoBtn, QChar(0xf04c), 15);
++    IconHelper::Instance()->SetIcon(ui->mousePassthroughBtn, QChar(0xf245), 15);
+     IconHelper::Instance()->SetIcon(ui->groupControlBtn, QChar(0xf0c0), 15);
+     IconHelper::Instance()->SetIcon(ui->clipboardBtn, QChar(0xf0c5), 15);
+     IconHelper::Instance()->SetIcon(ui->cameraTorchBtn, QChar(0xf0eb), 15);
+@@ -314,4 +317,32 @@ void ToolForm::on_clipboardBtn_clicked()
+         return;
+     }
+     device->requestDeviceClipboard();
+-}
+\ No newline at end of file
++}
++
++void ToolForm::on_mousePassthroughBtn_clicked()
++{
++    auto videoForm = qobject_cast<VideoForm*>(parentWidget());
++    if (!videoForm) {
++        return;
++    }
++    const bool enabled = videoForm->toggleMousePassthrough();
++    setMousePassthroughChecked(enabled);
++}
++
++void ToolForm::setMousePassthroughChecked(bool enabled)
++{
++    ui->mousePassthroughBtn->setStyleSheet(enabled ? "color: #00c853" : "");
++}
++
++void ToolForm::on_pauseVideoBtn_clicked()
++{
++    auto videoForm = qobject_cast<VideoForm*>(parentWidget());
++    if (!videoForm) {
++        return;
++    }
++    const bool paused = videoForm->toggleVideoPause();
++    ui->pauseVideoBtn->setStyleSheet(paused ? "color: #f0c419" : "");
++    ui->pauseVideoBtn->setToolTip(paused
++        ? tr("resume device video capture (Ctrl+Shift+P)")
++        : tr("pause device video capture (Ctrl+Shift+P)"));
++}
+diff --git a/QtScrcpy/ui/toolform.h b/QtScrcpy/ui/toolform.h
+index d9c02c7..f3a8035 100644
+--- a/QtScrcpy/ui/toolform.h
++++ b/QtScrcpy/ui/toolform.h
+@@ -22,6 +22,7 @@ public:
+     ~ToolForm();
+ 
+     void setSerial(const QString& serial);
++    void setMousePassthroughChecked(bool enabled);
+     bool isHost();
+ 
+ protected:
+@@ -53,6 +54,8 @@ private slots:
+     void on_groupControlBtn_clicked();
+     void on_openScreenBtn_clicked();
+     void on_clipboardBtn_clicked();
++    void on_pauseVideoBtn_clicked();
++    void on_mousePassthroughBtn_clicked();
+ 
+ private:
+     void initStyle();
+diff --git a/QtScrcpy/ui/toolform.ui b/QtScrcpy/ui/toolform.ui
+index 5b72e74..82bd22f 100644
+--- a/QtScrcpy/ui/toolform.ui
++++ b/QtScrcpy/ui/toolform.ui
+@@ -7,7 +7,7 @@
+     <x>0</x>
+     <y>0</y>
+     <width>63</width>
+-    <height>537</height>
++    <height>597</height>
+    </rect>
+   </property>
+   <property name="windowTitle">
+@@ -40,6 +40,26 @@
+      </property>
+     </widget>
+    </item>
++   <item>
++    <widget class="QPushButton" name="mousePassthroughBtn">
++     <property name="toolTip">
++      <string>Auto-scaled Android cursor with game touch-click bridge; Ctrl+Shift+M to release</string>
++     </property>
++     <property name="text">
++      <string/>
++     </property>
++    </widget>
++   </item>
++   <item>
++    <widget class="QPushButton" name="pauseVideoBtn">
++     <property name="toolTip">
++      <string>pause device video capture (Ctrl+Shift+P)</string>
++     </property>
++     <property name="text">
++      <string/>
++     </property>
++    </widget>
++   </item>
+    <item>
+     <spacer name="verticalSpacer">
+      <property name="orientation">
+diff --git a/QtScrcpy/ui/videoform.cpp b/QtScrcpy/ui/videoform.cpp
+index eb894ed..40de7ef 100644
+--- a/QtScrcpy/ui/videoform.cpp
++++ b/QtScrcpy/ui/videoform.cpp
+@@ -1,5 +1,6 @@
+ // #include <QDesktopWidget>
+ #include <QCoreApplication>
++#include <QCursor>
+ #include <QFileInfo>
+ #include <QLabel>
+ #include <QMessageBox>
+@@ -56,6 +57,9 @@ VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, int deco
+ 
+ VideoForm::~VideoForm()
+ {
++#if defined(Q_OS_WIN32)
++    setFpsRawMouseEnabled(false);
++#endif
+     delete ui;
+ }
+ 
+@@ -198,6 +202,77 @@ void VideoForm::showFPS(bool show)
+     m_fpsLabel->setVisible(show);
+ }
+ 
++bool VideoForm::toggleMousePassthrough(bool keepAndroidDevice)
++{
++    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
++    if (!device || device->isCameraMode()) {
++        return m_mousePassthrough;
++    }
++    // Android cursor mode and the custom FPS keymap both need exclusive host
++    // mouse capture. Do not allow both paths to run at the same time.
++    if (!m_mousePassthrough && device->isCurrentCustomKeymap()) {
++        return false;
++    }
++
++    m_mousePassthrough = !m_mousePassthrough;
++    device->setMousePassthrough(m_mousePassthrough,
++                                !m_mousePassthrough && keepAndroidDevice);
++    setUhidMouseCapture(m_mousePassthrough);
++    if (m_toolForm) {
++        m_toolForm->setMousePassthroughChecked(m_mousePassthrough);
++    }
++    return m_mousePassthrough;
++}
++
++void VideoForm::setUhidMouseCapture(bool enabled)
++{
++    if (enabled) {
++        setFocus(Qt::MouseFocusReason);
++        grabMouse(QCursor(Qt::BlankCursor));
++        MouseTap::getInstance()->enableMouseEventTap(getGrabCursorRect(), true);
++        recenterUhidMouse();
++
++        // QCursor::setPos() does not emit a move event on Windows when the FPS
++        // cursor is already at the same center point. Send one explicit center
++        // report so the newly-created Android drawing-tablet pointer enters
++        // proximity and becomes visible immediately after pressing '~'.
++        auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
++        QWidget *vw = videoWidget();
++        if (device && vw && !m_frameSize.isEmpty() && !vw->size().isEmpty()) {
++            const QPointF localPos(vw->rect().center());
++            const QPointF globalPos(vw->mapToGlobal(localPos.toPoint()));
++            QMouseEvent initialMove(QEvent::MouseMove, localPos, globalPos,
++                                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
++            emit device->mouseEvent(&initialMove, m_frameSize, vw->size());
++        }
++    } else {
++        MouseTap::getInstance()->enableMouseEventTap(QRect(), false);
++        releaseMouse();
++        unsetCursor();
++    }
++}
++
++void VideoForm::recenterUhidMouse()
++{
++    QWidget *vw = videoWidget();
++    if (!m_mousePassthrough || !vw) {
++        return;
++    }
++    QCursor::setPos(vw->mapToGlobal(vw->rect().center()));
++}
++
++bool VideoForm::toggleVideoPause()
++{
++    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
++    if (!device) {
++        return m_videoPaused;
++    }
++
++    m_videoPaused = !m_videoPaused;
++    device->setVideoPaused(m_videoPaused);
++    return m_videoPaused;
++}
++
+ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV)
+ {
+     if (isMetalMode()) {
+@@ -271,6 +346,16 @@ void VideoForm::installShortcut()
+         switchFullScreen();
+     });
+ 
++    // Toggle Android SDK mouse events (hover + pointer) instead of touch emulation.
++    shortcut = new QShortcut(QKeySequence("Ctrl+Shift+m"), this);
++    shortcut->setAutoRepeat(false);
++    connect(shortcut, &QShortcut::activated, this, [this]() { toggleMousePassthrough(); });
++
++    // Stop/restart capture and encoding on the Android server. Control remains active.
++    shortcut = new QShortcut(QKeySequence("Ctrl+Shift+p"), this);
++    shortcut->setAutoRepeat(false);
++    connect(shortcut, &QShortcut::activated, this, [this]() { toggleVideoPause(); });
++
+     // resizeSquare
+     shortcut = new QShortcut(QKeySequence("Ctrl+g"), this);
+     shortcut->setAutoRepeat(false);
+@@ -633,9 +718,120 @@ void VideoForm::updateFPS(quint32 fps)
+ void VideoForm::grabCursor(bool grab)
+ {
+     QRect rc = getGrabCursorRect();
++    bool shouldRecenter = grab;
++#if defined(Q_OS_WIN32)
++    shouldRecenter = grab && !m_fpsRawMouseActive;
++#endif
++    if (shouldRecenter) {
++        // Pointer mode may leave the Windows cursor anywhere on the video. Put
++        // it at a deterministic baseline before raw FPS deltas start.
++        QWidget *vw = videoWidget();
++        if (vw) {
++            QCursor::setPos(vw->mapToGlobal(vw->rect().center()));
++        }
++    }
++#if defined(Q_OS_WIN32)
++    // Enable only after recentering, so the synthetic cursor warp cannot be
++    // mistaken for a physical raw-input report on unusual mouse drivers.
++    setFpsRawMouseEnabled(grab);
++#endif
+     MouseTap::getInstance()->enableMouseEventTap(rc, grab);
+ }
+ 
++#if defined(Q_OS_WIN32)
++void VideoForm::setFpsRawMouseEnabled(bool enabled)
++{
++    if (enabled == m_fpsRawMouseActive) {
++        return;
++    }
++
++    RAWINPUTDEVICE device = {};
++    device.usUsagePage = 0x01; // Generic Desktop Controls
++    device.usUsage = 0x02;     // Mouse
++    device.dwFlags = enabled ? static_cast<DWORD>(0) : RIDEV_REMOVE;
++    device.hwndTarget = enabled ? reinterpret_cast<HWND>(winId()) : nullptr;
++
++    if (!RegisterRawInputDevices(&device, 1, static_cast<UINT>(sizeof(device)))) {
++        qWarning() << "FPS raw mouse registration failed:" << GetLastError();
++        // Keep the legacy QMouseEvent path available on registration failure.
++        m_fpsRawMouseActive = false;
++        return;
++    }
++
++    m_fpsRawMouseActive = enabled;
++    qInfo() << (enabled
++                    ? "FPS raw mouse input enabled (250 Hz touch coalescing)"
++                    : "FPS raw mouse input disabled");
++}
++
++#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
++bool VideoForm::nativeEvent(const QByteArray &eventType, void *message, long *result)
++#else
++bool VideoForm::nativeEvent(const QByteArray &eventType, void *message, qintptr *result)
++#endif
++{
++    if (m_fpsRawMouseActive && message) {
++        MSG *nativeMessage = static_cast<MSG *>(message);
++        if (nativeMessage->message == WM_INPUT) {
++            qint64 accumulatedX = 0;
++            qint64 accumulatedY = 0;
++            const auto accumulateMouseDelta = [&accumulatedX, &accumulatedY](const RAWINPUT *input) {
++                if (input && input->header.dwType == RIM_TYPEMOUSE
++                        && !(input->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
++                    accumulatedX += input->data.mouse.lLastX;
++                    accumulatedY += input->data.mouse.lLastY;
++                }
++            };
++
++            // Phase 1: consume the RAWINPUT attached to this WM_INPUT message.
++            RAWINPUT input = {};
++            UINT inputSize = static_cast<UINT>(sizeof(input));
++            const UINT bytesRead = GetRawInputData(
++                    reinterpret_cast<HRAWINPUT>(nativeMessage->lParam),
++                    RID_INPUT, &input, &inputSize,
++                    static_cast<UINT>(sizeof(RAWINPUTHEADER)));
++
++            if (bytesRead != static_cast<UINT>(-1) && bytesRead == inputSize) {
++                accumulateMouseDelta(&input);
++            }
++
++            // Phase 2: a 1000 Hz device may have accumulated more RAWINPUT
++            // records while Qt rendered a frame. Drain them in aligned batches
++            // now, so stale WM_INPUT messages cannot build up behind video/UI.
++            RAWINPUT bufferedInput[64];
++            for (;;) {
++                UINT bufferSize = static_cast<UINT>(sizeof(bufferedInput));
++                const UINT count = GetRawInputBuffer(
++                        bufferedInput, &bufferSize,
++                        static_cast<UINT>(sizeof(RAWINPUTHEADER)));
++                if (count == 0 || count == static_cast<UINT>(-1)) {
++                    break;
++                }
++
++                RAWINPUT *nextInput = bufferedInput;
++                for (UINT index = 0; index < count; ++index) {
++                    accumulateMouseDelta(nextInput);
++                    nextInput = NEXTRAWINPUTBLOCK(nextInput);
++                }
++            }
++
++            if (accumulatedX != 0 || accumulatedY != 0) {
++                auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
++                QWidget *vw = videoWidget();
++                if (device && vw && !m_frameSize.isEmpty() && !vw->size().isEmpty()) {
++                    device->mouseMoveRelative(
++                            QPointF(static_cast<qreal>(accumulatedX),
++                                    static_cast<qreal>(accumulatedY)),
++                            m_frameSize, vw->size());
++                }
++            }
++        }
++    }
++
++    return QWidget::nativeEvent(eventType, message, result);
++}
++#endif
++
+ void VideoForm::onFrame(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
+ {
+     updateRender(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
+@@ -683,14 +879,14 @@ void VideoForm::staysOnTop(bool top)
+ void VideoForm::mousePressEvent(QMouseEvent *event)
+ {
+     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+-    if (event->button() == Qt::MiddleButton) {
++    if (!m_mousePassthrough && event->button() == Qt::MiddleButton) {
+         if (device && !device->isCurrentCustomKeymap()) {
+             device->postGoHome();
+             return;
+         }
+     }
+ 
+-    if (event->button() == Qt::RightButton) {
++    if (!m_mousePassthrough && event->button() == Qt::RightButton) {
+         if (device && !device->isCurrentCustomKeymap()) {
+             device->postGoBack();
+             return;
+@@ -714,10 +910,12 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
+         QMouseEvent newEvent(event->type(), mappedPos, globalPos, event->button(), event->buttons(), event->modifiers());
+         emit device->mouseEvent(&newEvent, m_frameSize, vw->size());
+ 
+-        // debug keymap pos
++        // Debug the exact normalized video-widget position used by the
++        // controller. Do not use VideoForm coordinates here: the toolbar/skin
++        // may offset the actual video widget.
+         if (event->button() == Qt::LeftButton) {
+-            qreal x = localPos.x() / vw->size().width();
+-            qreal y = localPos.y() / vw->size().height();
++            qreal x = mappedPos.x() / vw->size().width();
++            qreal y = mappedPos.y() / vw->size().height();
+             QString posTip = QString(R"("pos": {"x": %1, "y": %2})").arg(x).arg(y);
+             qInfo() << posTip.toStdString().c_str();
+         }
+@@ -781,6 +979,14 @@ void VideoForm::mouseMoveEvent(QMouseEvent *event)
+     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+     QWidget *vw = videoWidget();
+     if (vw && vw->geometry().contains(event->pos())) {
++#if defined(Q_OS_WIN32)
++        // WM_INPUT already delivered this physical movement at the mouse's
++        // native polling rate. Forwarding the accelerated WM_MOUSEMOVE copy as
++        // well would double the camera movement and add a second conversion.
++        if (m_fpsRawMouseActive) {
++            return;
++        }
++#endif
+         if (!device) {
+             return;
+         }
+@@ -805,7 +1011,7 @@ void VideoForm::mouseDoubleClickEvent(QMouseEvent *event)
+         }
+     }
+ 
+-    if (event->button() == Qt::RightButton && device && !device->isCurrentCustomKeymap()) {
++    if (!m_mousePassthrough && event->button() == Qt::RightButton && device && !device->isCurrentCustomKeymap()) {
+         emit device->postBackOrScreenOn(event->type() == QEvent::MouseButtonPress);
+     }
+ 
+@@ -862,6 +1068,18 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
+     if (!device) {
+         return;
+     }
++    const bool isMouseModeSwitch = !event->isAutoRepeat()
++        && (event->key() == Qt::Key_QuoteLeft || event->key() == Qt::Key_AsciiTilde);
++    const bool switchFpsToUhid = isMouseModeSwitch
++        && !m_mousePassthrough
++        && device->isCurrentCustomKeymap();
++
++    // FPS -> UHID: first let the keymap leave FPS mode, then activate the
++    // Android pointer. UHID -> FPS: stop pointer reports but retain the idle
++    // descriptor, avoiding InputReader device reconfiguration in the hot path.
++    if (isMouseModeSwitch && m_mousePassthrough) {
++        toggleMousePassthrough(true);
++    }
+     if (Qt::Key_Escape == event->key() && !event->isAutoRepeat() && isFullScreen()) {
+         switchFullScreen();
+     }
+@@ -869,6 +1087,9 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
+     QWidget *vw = videoWidget();
+     QSize widgetSize = vw ? vw->size() : m_frameSize;
+     emit device->keyEvent(event, m_frameSize, widgetSize);
++    if (switchFpsToUhid && !device->isCurrentCustomKeymap()) {
++        toggleMousePassthrough();
++    }
+ }
+ 
+ void VideoForm::keyReleaseEvent(QKeyEvent *event)
+@@ -942,10 +1163,19 @@ void VideoForm::resizeEvent(QResizeEvent *event)
+ void VideoForm::closeEvent(QCloseEvent *event)
+ {
+     Q_UNUSED(event)
++#if defined(Q_OS_WIN32)
++    setFpsRawMouseEnabled(false);
++#endif
+     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+     if (!device) {
+         return;
+     }
++    if (m_mousePassthrough) {
++        m_mousePassthrough = false;
++        setUhidMouseCapture(false);
++    }
++    // Also destroys a UHID device retained by the fast pointer -> FPS switch.
++    device->setMousePassthrough(false);
+     Config::getInstance().setRect(device->getSerial(), geometry());
+     device->disconnectDevice();
+ }
+diff --git a/QtScrcpy/ui/videoform.h b/QtScrcpy/ui/videoform.h
+index bdcf740..e1f0414 100644
+--- a/QtScrcpy/ui/videoform.h
++++ b/QtScrcpy/ui/videoform.h
+@@ -35,6 +35,8 @@ public:
+     void showFPS(bool show);
+     void switchFullScreen();
+     bool isHost();
++    bool toggleVideoPause();
++    bool toggleMousePassthrough(bool keepAndroidDevice = false);
+ 
+ private:
+     void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV,
+@@ -53,6 +55,11 @@ private:
+     void moveCenter();
+     void installShortcut();
+     QRect getScreenRect();
++    void setUhidMouseCapture(bool enabled);
++    void recenterUhidMouse();
++#if defined(Q_OS_WIN32)
++    void setFpsRawMouseEnabled(bool enabled);
++#endif
+ 
+ protected:
+     void mousePressEvent(QMouseEvent *event) override;
+@@ -62,6 +69,13 @@ protected:
+     void wheelEvent(QWheelEvent *event) override;
+     void keyPressEvent(QKeyEvent *event) override;
+     void keyReleaseEvent(QKeyEvent *event) override;
++#if defined(Q_OS_WIN32)
++#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
++    bool nativeEvent(const QByteArray &eventType, void *message, long *result) override;
++#else
++    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
++#endif
++#endif
+ 
+     void paintEvent(QPaintEvent *) override;
+     void showEvent(QShowEvent *event) override;
+@@ -102,6 +116,11 @@ private:
+     bool m_metalFirstFrame = true;  // Metal 首次帧标记
+     bool m_flexDisplay = false;
+     bool m_preventAutoResize = false;
++    bool m_videoPaused = false;
++    bool m_mousePassthrough = false;
++#if defined(Q_OS_WIN32)
++    bool m_fpsRawMouseActive = false;
++#endif
+     QTimer m_flexResizeTimer;
+     QSize m_pendingDisplaySize;
+ 
