@@ -26,7 +26,7 @@ jobs:
       - name: Build and install custom scrcpy server
         shell: pwsh
         run: |
-          & "server-patches/build-custom-server.ps1"
+          & ".\server-patches\build-custom-server.ps1"
           if ($LASTEXITCODE -ne 0) { throw "Custom scrcpy server build failed" }
       - uses: jurplel/install-qt-action@v4.1.1
         with:
