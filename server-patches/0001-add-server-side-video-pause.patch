@@ -1,0 +1,313 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/Server.java b/server/src/main/java/com/genymobile/scrcpy/Server.java
+index d7d1a76..b5fc721 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/Server.java
++++ b/server/src/main/java/com/genymobile/scrcpy/Server.java
+@@ -156,6 +156,7 @@ public final class Server {
+ 
+                 if (controller != null) {
+                     controller.setSurfaceCapture(surfaceCapture);
++                    controller.setSurfaceEncoder(surfaceEncoder);
+                 }
+             }
+ 
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
+index 777873b..0a5b486 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
+@@ -30,6 +30,7 @@ public final class ControlMessage {
+     public static final int TYPE_CAMERA_ZOOM_OUT = 20;
+     public static final int TYPE_RESIZE_DISPLAY = 21;
+     public static final int TYPE_SCAN_FILE = 22;
++    public static final int TYPE_SET_VIDEO_PAUSED = 23;
+ 
+     public static final long SEQUENCE_INVALID = 0;
+ 
+@@ -134,6 +135,13 @@ public final class ControlMessage {
+         return msg;
+     }
+ 
++    public static ControlMessage createSetVideoPaused(boolean paused) {
++        ControlMessage msg = new ControlMessage();
++        msg.type = TYPE_SET_VIDEO_PAUSED;
++        msg.on = paused;
++        return msg;
++    }
++
+     public static ControlMessage createEmpty(int type) {
+         ControlMessage msg = new ControlMessage();
+         msg.type = type;
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java
+index b2591d6..d6aa986 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java
+@@ -41,6 +41,8 @@ public class ControlMessageReader {
+                 return parseSetClipboard();
+             case ControlMessage.TYPE_SET_DISPLAY_POWER:
+                 return parseSetDisplayPower();
++            case ControlMessage.TYPE_SET_VIDEO_PAUSED:
++                return parseSetVideoPaused();
+             case ControlMessage.TYPE_EXPAND_NOTIFICATION_PANEL:
+             case ControlMessage.TYPE_EXPAND_SETTINGS_PANEL:
+             case ControlMessage.TYPE_COLLAPSE_PANELS:
+@@ -149,6 +151,11 @@ public class ControlMessageReader {
+         return ControlMessage.createSetDisplayPower(on);
+     }
+ 
++    private ControlMessage parseSetVideoPaused() throws IOException {
++        boolean paused = dis.readBoolean();
++        return ControlMessage.createSetVideoPaused(paused);
++    }
++
+     private ControlMessage parseUhidCreate() throws IOException {
+         int id = dis.readUnsignedShort();
+         int vendorId = dis.readUnsignedShort();
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+index 55d6e11..d5428f7 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+@@ -16,6 +16,7 @@ import com.genymobile.scrcpy.video.CameraCapture;
+ import com.genymobile.scrcpy.video.CaptureControl;
+ import com.genymobile.scrcpy.video.NewDisplayCapture;
+ import com.genymobile.scrcpy.video.SurfaceCapture;
++import com.genymobile.scrcpy.video.SurfaceEncoder;
+ import com.genymobile.scrcpy.video.VideoSource;
+ import com.genymobile.scrcpy.video.VirtualDisplayListener;
+ import com.genymobile.scrcpy.wrappers.ClipboardManager;
+@@ -111,6 +112,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+ 
+     // Used for resetting video encoding on RESET_VIDEO message or for sending camera controls
+     private SurfaceCapture surfaceCapture;
++    private SurfaceEncoder surfaceEncoder;
+ 
+     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
+         this.camera = options.getVideoSource() == VideoSource.CAMERA;
+@@ -179,6 +181,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         this.surfaceCapture = surfaceCapture;
+     }
+ 
++    public void setSurfaceEncoder(SurfaceEncoder surfaceEncoder) {
++        this.surfaceEncoder = surfaceEncoder;
++    }
++
+     private UhidManager getUhidManager() {
+         if (uhidManager == null) {
+             int uhidDisplayId = displayId;
+@@ -337,6 +343,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+             case ControlMessage.TYPE_RESET_VIDEO:
+                 resetVideo();
+                 return true;
++            case ControlMessage.TYPE_SET_VIDEO_PAUSED:
++                setVideoPaused(msg.getOn());
++                return true;
+             default:
+                 // fall through
+         }
+@@ -876,6 +885,13 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         }
+     }
+ 
++    private void setVideoPaused(boolean paused) {
++        if (surfaceEncoder != null) {
++            Ln.i(paused ? "Video capture paused" : "Video capture resumed");
++            surfaceEncoder.setPaused(paused);
++        }
++    }
++
+     private void resizeDisplay(int width, int height) {
+         NewDisplayCapture newDisplayCapture = (NewDisplayCapture) surfaceCapture;
+         newDisplayCapture.requestResize(width, height);
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/CaptureControl.java b/server/src/main/java/com/genymobile/scrcpy/video/CaptureControl.java
+index 7933ea7..8e56f79 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/CaptureControl.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/CaptureControl.java
+@@ -8,25 +8,53 @@ public class CaptureControl {
+     public static final int RESET_REASON_DISPLAY_PROPERTIES_CHANGED = 1 << 1;
+     public static final int RESET_REASON_CLIENT_RESET = 1 << 2;
+     public static final int RESET_REASON_CLIENT_RESIZED = 1 << 3;
++    public static final int RESET_REASON_CLIENT_PAUSED = 1 << 4;
+ 
+     private int reset = 0;
+ 
+     // Current instance of MediaCodec to "interrupt" on reset
+     private MediaCodec runningMediaCodec;
++    private boolean paused;
+ 
+     public synchronized boolean isResetRequested() {
+         return reset != 0;
+     }
+ 
++    public synchronized boolean isPaused() {
++        return paused;
++    }
++
+     public synchronized int consumeReset() {
+         int value = reset;
+         reset = 0;
+         return value;
+     }
+ 
++    public synchronized int waitUntilResumed() throws InterruptedException {
++        while (paused && (reset & RESET_REASON_TERMINATED) == 0) {
++            wait();
++        }
++        return consumeReset();
++    }
++
++    public synchronized void setPaused(boolean paused) {
++        if (this.paused == paused) {
++            return;
++        }
++        this.paused = paused;
++        if (paused) {
++            reset(RESET_REASON_CLIENT_PAUSED);
++        } else {
++            notifyAll();
++        }
++    }
++
+     public synchronized void reset(int reason) {
+         assert reason != 0;
+         reset |= reason;
++        if ((reason & RESET_REASON_TERMINATED) != 0) {
++            notifyAll();
++        }
+         if (runningMediaCodec != null) {
+             try {
+                 runningMediaCodec.signalEndOfInputStream();
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+index 5ed4c73..32535c8 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+@@ -292,6 +292,16 @@ public class NewDisplayCapture extends SurfaceCapture {
+         }
+     }
+ 
++    @Override
++    public void pause() {
++        stop();
++        if (virtualDisplay != null) {
++            // Keep the virtual display and its content/control target alive,
++            // but stop SurfaceFlinger from producing frames for the encoder.
++            virtualDisplay.setSurface(null);
++        }
++    }
++
+     @Override
+     public void release() {
+         displayMonitor.stopAndRelease();
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
+index 0768181..64f35ee 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
+@@ -182,6 +182,19 @@ public class ScreenCapture extends SurfaceCapture {
+         }
+     }
+ 
++    @Override
++    public void pause() {
++        stop();
++        if (display != null) {
++            SurfaceControl.destroyDisplay(display);
++            display = null;
++        }
++        if (virtualDisplay != null) {
++            virtualDisplay.release();
++            virtualDisplay = null;
++        }
++    }
++
+     @Override
+     public void release() {
+         displayMonitor.stopAndRelease();
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/SurfaceCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/SurfaceCapture.java
+index 4dd2879..432e917 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/SurfaceCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/SurfaceCapture.java
+@@ -59,6 +59,14 @@ public abstract class SurfaceCapture {
+         // Do nothing by default
+     }
+ 
++    /**
++     * Stop capture and detach any producer surface while the control channel
++     * remains alive.
++     */
++    public void pause() {
++        stop();
++    }
++
+     /**
+      * Return the video size
+      *
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.java b/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.java
+index 539681b..59826ce 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.java
+@@ -104,7 +104,13 @@ public class SurfaceEncoder implements AsyncProcessor {
+             int retainedResetReasons = 0;
+ 
+             do {
+-                int resetReasons = captureControl.consumeReset();
++                int resetReasons;
++                try {
++                    resetReasons = captureControl.waitUntilResumed();
++                } catch (InterruptedException e) {
++                    Thread.currentThread().interrupt();
++                    break;
++                }
+                 if ((resetReasons & CaptureControl.RESET_REASON_TERMINATED) != 0) {
+                     break;
+                 }
+@@ -167,7 +173,11 @@ public class SurfaceEncoder implements AsyncProcessor {
+                 } finally {
+                     captureControl.setRunningMediaCodec(null);
+                     if (captureStarted) {
+-                        capture.stop();
++                        if (captureControl.isPaused()) {
++                            capture.pause();
++                        } else {
++                            capture.stop();
++                        }
+                     }
+                     if (mediaCodecStarted) {
+                         try {
+@@ -379,6 +389,10 @@ public class SurfaceEncoder implements AsyncProcessor {
+         }
+     }
+ 
++    public void setPaused(boolean paused) {
++        captureControl.setPaused(paused);
++    }
++
+     @Override
+     public void join() throws InterruptedException {
+         if (thread != null) {
+diff --git a/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java b/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java
+index b3d18bf..85619cb 100644
+--- a/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java
++++ b/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java
+@@ -300,6 +300,24 @@ public class ControlMessageReaderTest {
+         Assert.assertEquals(-1, bis.read()); // EOS
+     }
+ 
++    @Test
++    public void testParseSetVideoPaused() throws IOException {
++        ByteArrayOutputStream bos = new ByteArrayOutputStream();
++        DataOutputStream dos = new DataOutputStream(bos);
++        dos.writeByte(ControlMessage.TYPE_SET_VIDEO_PAUSED);
++        dos.writeBoolean(true);
++        byte[] packet = bos.toByteArray();
++
++        ByteArrayInputStream bis = new ByteArrayInputStream(packet);
++        ControlMessageReader reader = new ControlMessageReader(bis);
++
++        ControlMessage event = reader.read();
++        Assert.assertEquals(ControlMessage.TYPE_SET_VIDEO_PAUSED, event.getType());
++        Assert.assertTrue(event.getOn());
++
++        Assert.assertEquals(-1, bis.read()); // EOS
++    }
++
+     @Test
+     public void testParseRotateDevice() throws IOException {
+         ByteArrayOutputStream bos = new ByteArrayOutputStream();
+

@@ -1,0 +1,193 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
+index 0a5b486..cb87228 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
+@@ -31,6 +31,7 @@ public final class ControlMessage {
+     public static final int TYPE_RESIZE_DISPLAY = 21;
+     public static final int TYPE_SCAN_FILE = 22;
+     public static final int TYPE_SET_VIDEO_PAUSED = 23;
++    public static final int TYPE_RESET_INPUT_STATE = 24;
+ 
+     public static final long SEQUENCE_INVALID = 0;
+ 
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java
+index d6aa986..9186524 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java
+@@ -51,6 +51,7 @@ public class ControlMessageReader {
+             case ControlMessage.TYPE_RESET_VIDEO:
+             case ControlMessage.TYPE_CAMERA_ZOOM_IN:
+             case ControlMessage.TYPE_CAMERA_ZOOM_OUT:
++            case ControlMessage.TYPE_RESET_INPUT_STATE:
+                 return ControlMessage.createEmpty(type);
+             case ControlMessage.TYPE_UHID_CREATE:
+                 return parseUhidCreate();
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+index d5428f7..1f81f97 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+@@ -104,6 +104,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+     private final Object displayDataAvailable = new Object(); // condition variable
+ 
+     private long lastTouchDown;
++    private int lastTouchDisplayId = Device.DISPLAY_ID_NONE;
++    private int lastTouchSource = InputDevice.SOURCE_TOUCHSCREEN;
+     private final PointersState pointersState = new PointersState();
+     private final MotionEvent.PointerProperties[] pointerProperties = new MotionEvent.PointerProperties[PointersState.MAX_POINTERS];
+     private final MotionEvent.PointerCoords[] pointerCoords = new MotionEvent.PointerCoords[PointersState.MAX_POINTERS];
+@@ -425,6 +427,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+                 case ControlMessage.TYPE_SCAN_FILE:
+                     scanFile(msg.getText());
+                     return true;
++                case ControlMessage.TYPE_RESET_INPUT_STATE:
++                    resetInputState();
++                    return true;
+                 default:
+                     // fall through
+             }
+@@ -551,9 +556,12 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+             source = InputDevice.SOURCE_TOUCHSCREEN;
+             // Buttons must not be set for touch events
+             buttons = 0;
+-            pointer.setUp(action == MotionEvent.ACTION_UP);
++            pointer.setUp(action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL);
+         }
+ 
++        lastTouchDisplayId = targetDisplayId;
++        lastTouchSource = source;
++
+         int pointerCount = pointersState.update(pointerProperties, pointerCoords);
+         if (pointerCount == 1) {
+             if (action == MotionEvent.ACTION_DOWN) {
+@@ -629,6 +637,36 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         return Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
+     }
+ 
++    private void resetInputState() {
++        boolean hadTrackedPointers = pointersState.size() > 0;
++        boolean globalCanceled = ServiceManager.getInputManager().cancelCurrentTouch();
++        boolean trackedCanceled = false;
++
++        if (!globalCanceled && hadTrackedPointers) {
++            long now = SystemClock.uptimeMillis();
++            int pointerCount = pointersState.update(pointerProperties, pointerCoords);
++            int targetDisplayId = lastTouchDisplayId != Device.DISPLAY_ID_NONE ? lastTouchDisplayId : getActionDisplayId();
++            if (pointerCount > 0 && targetDisplayId != Device.DISPLAY_ID_NONE) {
++                long downTime = lastTouchDown != 0 ? lastTouchDown : now;
++                MotionEvent cancelEvent = MotionEvent.obtain(downTime, now, MotionEvent.ACTION_CANCEL, pointerCount, pointerProperties,
++                        pointerCoords, 0, 0, 1f, 1f, DEFAULT_DEVICE_ID, 0, lastTouchSource, 0);
++                trackedCanceled = Device.injectEvent(cancelEvent, targetDisplayId, Device.INJECT_MODE_WAIT_FOR_FINISH);
++                cancelEvent.recycle();
++            }
++        }
++
++        pointersState.clear();
++        lastTouchDown = 0;
++        lastTouchDisplayId = Device.DISPLAY_ID_NONE;
++        lastTouchSource = InputDevice.SOURCE_TOUCHSCREEN;
++        // A reset is sent before every new desktop gesture. Only log the
++        // exceptional case where scrcpy actually found a stale pointer, so the
++        // normal FPS/click path does not flood adb output or add log overhead.
++        if (hadTrackedPointers) {
++            Ln.d("Recovered stale input state: global=" + globalCanceled + ", tracked=" + trackedCanceled);
++        }
++    }
++
+     private boolean injectScroll(Position position, float hScroll, float vScroll, int buttons) {
+         long now = SystemClock.uptimeMillis();
+ 
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/PointersState.java b/server/src/main/java/com/genymobile/scrcpy/control/PointersState.java
+index efe16f0..ce914af 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/PointersState.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/PointersState.java
+@@ -46,6 +46,14 @@ public class PointersState {
+         return pointers.get(index);
+     }
+ 
++    public int size() {
++        return pointers.size();
++    }
++
++    public void clear() {
++        pointers.clear();
++    }
++
+     public int getPointerIndex(long id) {
+         int index = indexOf(id);
+         if (index != -1) {
+diff --git a/server/src/main/java/com/genymobile/scrcpy/wrappers/InputManager.java b/server/src/main/java/com/genymobile/scrcpy/wrappers/InputManager.java
+index f55648d..f44976e 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/wrappers/InputManager.java
++++ b/server/src/main/java/com/genymobile/scrcpy/wrappers/InputManager.java
+@@ -27,6 +27,8 @@ public final class InputManager {
+     private static Method setActionButtonMethod;
+     private static Method addUniqueIdAssociationByPortMethod;
+     private static Method removeUniqueIdAssociationByPortMethod;
++    private static Method cancelCurrentTouchMethod;
++    private boolean cancelCurrentTouchUnavailable;
+ 
+     static InputManager create() {
+         android.hardware.input.InputManager manager = (android.hardware.input.InputManager) FakeContext.get()
+@@ -108,6 +110,39 @@ public final class InputManager {
+         }
+     }
+ 
++    private static Method getCancelCurrentTouchMethod() throws NoSuchMethodException {
++        if (cancelCurrentTouchMethod == null) {
++            cancelCurrentTouchMethod = android.hardware.input.InputManager.class.getMethod("cancelCurrentTouch");
++        }
++        return cancelCurrentTouchMethod;
++    }
++
++    /**
++     * Cancel pointer gestures known by Android's InputDispatcher. This hidden
++     * API requires MONITOR_INPUT; rooted/adbd-root sessions can use it, while
++     * regular shell sessions fall back to scrcpy's tracked-pointer cancel.
++     */
++    public boolean cancelCurrentTouch() {
++        if (cancelCurrentTouchUnavailable) {
++            return false;
++        }
++
++        try {
++            Method method = getCancelCurrentTouchMethod();
++            method.invoke(manager);
++            return true;
++        } catch (ReflectiveOperationException e) {
++            cancelCurrentTouchUnavailable = true;
++            Throwable cause = e instanceof InvocationTargetException ? e.getCause() : e;
++            if (cause instanceof SecurityException) {
++                Ln.w("Global touch cancellation requires MONITOR_INPUT; using tracked-pointer recovery");
++            } else {
++                Ln.w("Global touch cancellation is unavailable; using tracked-pointer recovery", e);
++            }
++            return false;
++        }
++    }
++
+     private static Method getAddUniqueIdAssociationByPortMethod() throws NoSuchMethodException {
+         if (addUniqueIdAssociationByPortMethod == null) {
+             addUniqueIdAssociationByPortMethod = android.hardware.input.InputManager.class.getMethod(
+diff --git a/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java b/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java
+index 85619cb..689def9 100644
+--- a/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java
++++ b/server/src/test/java/com/genymobile/scrcpy/control/ControlMessageReaderTest.java
+@@ -318,6 +318,18 @@ public class ControlMessageReaderTest {
+         Assert.assertEquals(-1, bis.read()); // EOS
+     }
+ 
++    @Test
++    public void testParseResetInputState() throws IOException {
++        byte[] packet = {(byte) ControlMessage.TYPE_RESET_INPUT_STATE};
++
++        ByteArrayInputStream bis = new ByteArrayInputStream(packet);
++        ControlMessageReader reader = new ControlMessageReader(bis);
++
++        ControlMessage event = reader.read();
++        Assert.assertEquals(ControlMessage.TYPE_RESET_INPUT_STATE, event.getType());
++        Assert.assertEquals(-1, bis.read()); // EOS
++    }
++
+     @Test
+     public void testParseRotateDevice() throws IOException {
+         ByteArrayOutputStream bos = new ByteArrayOutputStream();
