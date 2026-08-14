@@ -811,7 +811,8 @@ bool VideoForm::nativeEvent(const QByteArray &eventType, void *message, qintptr 
                 RAWINPUT *nextInput = bufferedInput;
                 for (UINT index = 0; index < count; ++index) {
                     accumulateMouseDelta(nextInput);
-                    nextInput = NEXTRAWINPUTBLOCK(nextInput);
+                    nextInput = reinterpret_cast<RAWINPUT *>(
+                            reinterpret_cast<BYTE *>(nextInput) + nextInput->header.dwSize);
                 }
             }
 
