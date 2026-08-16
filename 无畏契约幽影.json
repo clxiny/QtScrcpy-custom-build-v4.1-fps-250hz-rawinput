@@ -172,7 +172,7 @@
       "type": "KMT_CLICK"
     },
     {
-      "comment": "背包：松开 Tab 后释放或重新捕获鼠标",
+      "comment": "背包：松开 Tab 后切换平板虚拟鼠标",
       "key": "Key_Tab",
       "pos": {
         "x": 0.501,

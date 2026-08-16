@@ -56,6 +56,7 @@ private:
     void installShortcut();
     QRect getScreenRect();
     void setUhidMouseCapture(bool enabled);
+    void syncMousePassthroughForKeymapTransition(bool wasCustomKeymap);
     void recenterUhidMouse();
 #if defined(Q_OS_WIN32)
     void setFpsRawMouseEnabled(bool enabled);

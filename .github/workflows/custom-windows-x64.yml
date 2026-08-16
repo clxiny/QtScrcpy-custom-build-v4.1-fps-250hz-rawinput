@@ -50,6 +50,7 @@ jobs:
           Copy-Item "QtScrcpy/QtScrcpyCore/src/third_party/adb/win/*" $package -Force
           Copy-Item "QtScrcpy/QtScrcpyCore/src/third_party/scrcpy-server" $package -Force
           Copy-Item "keymap" (Join-Path $package "keymap") -Recurse -Force
+          Copy-Item "无畏契约幽影.json" (Join-Path $package "keymap") -Force
           Copy-Item "config" (Join-Path $package "config") -Recurse -Force
           windeployqt --release --compiler-runtime --no-translations (Join-Path $package "QtScrcpy.exe")
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }

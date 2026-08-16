@@ -52,13 +52,11 @@ void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSiz
         if (from->type() != QEvent::MouseButtonPress) {
             return;
         }
-        if (!switchGameMap()) {
-            m_needBackMouseMove = false;
-        }
+        switchGameMap();
         return;
     }
 
-    if (!m_needBackMouseMove && m_gameMap) {
+    if (m_gameMap) {
         updateSize(frameSize, showSize);
         // mouse move
         if (m_keyMap.isValidMouseMoveMap()) {
@@ -85,7 +83,7 @@ void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSiz
 
 void InputConvertGame::mouseMoveRelative(const QPointF &delta, const QSize &frameSize, const QSize &showSize)
 {
-    if (!m_gameMap || m_needBackMouseMove || !m_processMouseMove
+    if (!m_gameMap || !m_processMouseMove
             || !m_keyMap.isValidMouseMoveMap() || isTinyDelta(delta)) {
         return;
     }
@@ -111,9 +109,7 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
             return;
         }
         updateSize(frameSize, showSize);
-        if (!switchGameMap()) {
-            m_needBackMouseMove = false;
-        }
+        switchGameMap();
         return;
     }
 
@@ -129,11 +125,16 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
     if (!haveLatchedNode) {
         node = m_keyMap.getKeyMapNodeKey(from->key());
     }
-    // 处理特殊按键：可以释放出鼠标的按键
-    if (m_needBackMouseMove && KeyMap::KMT_CLICK == node.type && node.data.click.switchMap) {
+    // Keep switchMap keys active while the Android UHID pointer is enabled so
+    // the same binding can return directly to the FPS touch map.
+    if (!m_gameMap && KeyMap::KMT_CLICK == node.type && node.data.click.switchMap) {
         updateSize(frameSize, showSize);
-        // Qt::Key_Tab Qt::Key_M for PUBG mobile
-        processKeyClick(node.data.click.keyNode.pos, false, node.data.click.switchMap, from);
+        processKeyClick(node.data.click.keyNode.pos, false, from);
+        processAndroidKey(node.data.click.keyNode.androidKey, from);
+        if (QEvent::KeyRelease == from->type()) {
+            applyLayerAction(node);
+            switchGameMap();
+        }
         return;
     }
 
@@ -183,15 +184,18 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
             return;
         // 处理普通按键
         case KeyMap::KMT_CLICK:
-            processKeyClick(node.data.click.keyNode.pos, false, node.data.click.switchMap, from);
+            processKeyClick(node.data.click.keyNode.pos, false, from);
             processAndroidKey(node.data.click.keyNode.androidKey, from);
             if (QEvent::KeyRelease == from->type()) {
                 applyLayerAction(node);
                 m_pressedKeyNodes.remove(from->key());
+                if (node.data.click.switchMap) {
+                    switchGameMap();
+                }
             }
             return;
         case KeyMap::KMT_CLICK_TWICE:
-            processKeyClick(node.data.clickTwice.keyNode.pos, true, false, from);
+            processKeyClick(node.data.clickTwice.keyNode.pos, true, from);
             processAndroidKey(node.data.clickTwice.keyNode.androidKey, from);
             if (QEvent::KeyRelease == from->type()) {
                 applyLayerAction(node);
@@ -575,13 +579,8 @@ void InputConvertGame::processSteerWheel(const KeyMap::KeyMapNode &node, const Q
 
 // -------- key event --------
 
-void InputConvertGame::processKeyClick(const QPointF &clickPos, bool clickTwice, bool switchMap, const QKeyEvent *from)
+void InputConvertGame::processKeyClick(const QPointF &clickPos, bool clickTwice, const QKeyEvent *from)
 {
-    if (switchMap && QEvent::KeyRelease == from->type()) {
-        m_needBackMouseMove = !m_needBackMouseMove;
-        hideMouseCursor(!m_needBackMouseMove);
-    }
-
     if (QEvent::KeyPress == from->type()) {
         int id = attachTouchID(from->key());
         sendTouchDownEvent(id, clickPos);
@@ -817,7 +816,7 @@ void InputConvertGame::queueMouseMoveDelta(const QPointF &delta)
 
 void InputConvertGame::flushPendingMouseMoveDelta()
 {
-    if (!m_gameMap || m_needBackMouseMove || !m_processMouseMove) {
+    if (!m_gameMap || !m_processMouseMove) {
         m_ctrlMouseMove.pendingDelta = QPointF();
         return;
     }

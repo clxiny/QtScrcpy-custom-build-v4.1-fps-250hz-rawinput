@@ -252,6 +252,22 @@ void VideoForm::setUhidMouseCapture(bool enabled)
     }
 }
 
+void VideoForm::syncMousePassthroughForKeymapTransition(bool wasCustomKeymap)
+{
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device || wasCustomKeymap == device->isCurrentCustomKeymap()) {
+        return;
+    }
+
+    if (!device->isCurrentCustomKeymap() && !m_mousePassthrough) {
+        // Direct FPS touch mapping -> Android UHID drawing-tablet pointer.
+        toggleMousePassthrough();
+    } else if (device->isCurrentCustomKeymap() && m_mousePassthrough) {
+        // Android UHID drawing-tablet pointer -> direct FPS touch mapping.
+        toggleMousePassthrough(true);
+    }
+}
+
 void VideoForm::recenterUhidMouse()
 {
     QWidget *vw = videoWidget();
@@ -1081,18 +1097,7 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
-    const bool isMouseModeSwitch = !event->isAutoRepeat()
-        && (event->key() == Qt::Key_QuoteLeft || event->key() == Qt::Key_AsciiTilde);
-    const bool switchFpsToUhid = isMouseModeSwitch
-        && !m_mousePassthrough
-        && device->isCurrentCustomKeymap();
-
-    // FPS -> UHID: first let the keymap leave FPS mode, then activate the
-    // Android pointer. UHID -> FPS: stop pointer reports but retain the idle
-    // descriptor, avoiding InputReader device reconfiguration in the hot path.
-    if (isMouseModeSwitch && m_mousePassthrough) {
-        toggleMousePassthrough(true);
-    }
+    const bool wasCustomKeymap = device->isCurrentCustomKeymap();
     if (Qt::Key_Escape == event->key() && !event->isAutoRepeat() && isFullScreen()) {
         switchFullScreen();
     }
@@ -1100,9 +1105,7 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
     QWidget *vw = videoWidget();
     QSize widgetSize = vw ? vw->size() : m_frameSize;
     emit device->keyEvent(event, m_frameSize, widgetSize);
-    if (switchFpsToUhid && !device->isCurrentCustomKeymap()) {
-        toggleMousePassthrough();
-    }
+    syncMousePassthroughForKeymapTransition(wasCustomKeymap);
 }
 
 void VideoForm::keyReleaseEvent(QKeyEvent *event)
@@ -1116,9 +1119,11 @@ void VideoForm::keyReleaseEvent(QKeyEvent *event)
         event->accept();
         return;
     }
+    const bool wasCustomKeymap = device->isCurrentCustomKeymap();
     QWidget *vw = videoWidget();
     QSize widgetSize = vw ? vw->size() : m_frameSize;
     emit device->keyEvent(event, m_frameSize, widgetSize);
+    syncMousePassthroughForKeymapTransition(wasCustomKeymap);
 }
 
 void VideoForm::paintEvent(QPaintEvent *paint)
