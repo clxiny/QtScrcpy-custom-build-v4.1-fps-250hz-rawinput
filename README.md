@@ -135,14 +135,14 @@ Input state recovery requested
 1. 下载或克隆编辑器仓库，直接用浏览器打开 `index.html`；也可以在该目录执行 `node server.js`，然后访问 `http://127.0.0.1:4173`。
 2. 导入本仓库 `keymap/` 中的已有模板，或导入根目录的 `无畏契约幽影.json`；背景图只用于校对位置，不会写入导出的 JSON。
 3. 拖动节点、编辑方向轮盘或点击按键录入框后直接按键盘/鼠标键。背包、地图等节点可勾选“松开后切换平板虚拟鼠标”，即旧字段 `switchMap: true`。
-4. 导出 JSON 后，在 QtScrcpy 中载入该配置。`switchLayer` 只切换配置图层；`switchMap` 只切换 FPS 鼠标捕获状态，二者互不替代。
+4. 导出 JSON 后，在 QtScrcpy 中载入该配置。`switchLayer` 只切换配置图层；`switchMap` 会在 FPS 触控映射与 Android UHID 虚拟平板鼠标之间切换，按下同一按键可再切回 FPS 映射，二者互不替代。
 
 ## Windows 构建包
 
-本仓库本身包含可构建的完整源码。已验证的 Windows x64 便携包作为 [v4.1.0-input-recovery-20260816 Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816) 附件提供，下载后即可解压运行：
+本仓库本身包含可构建的完整源码。已验证的 Windows x64 便携包作为 [v4.1.0-input-recovery-20260816-switchmap-uhid Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816-switchmap-uhid) 附件提供，下载后即可解压运行：
 
 - 文件：`QtScrcpy-custom-v4.1-input-recovery-win-x64.zip`
-- SHA-256：`4D90CDD70901C7326D5ED585712E30BF90F80A13D07BAAC71540C571160F0019`
+- SHA-256：`1ED243DF7F786AD142FC0679094C8CC8C3CF4A8EA85EE6F6379A15A51D364E53`
 - 内容：`QtScrcpy.exe`、Qt 运行库、ADB 组件、定制 `scrcpy-server` 和 `keymap/无畏契约幽影.json` 模板。
 
 下载后可用以下命令校验：
@@ -219,11 +219,11 @@ cmake --build build-custom --config RelWithDebInfo --parallel 8
 
 ## 版本与校验
 
-当前输入恢复发行版：**v4.1.0-input-recovery-20260814**
+当前输入恢复发行版：**v4.1.0-input-recovery-20260816-switchmap-uhid**
 
-- [GitHub Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260814)
+- [GitHub Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816-switchmap-uhid)
 - 文件：`QtScrcpy-custom-v4.1-input-recovery-win-x64.zip`
-- SHA-256：`595E9B648183F489797B98F609B5D1259C1D417BE9934AB1F7D97244D7155FCD`
+- SHA-256：`1ED243DF7F786AD142FC0679094C8CC8C3CF4A8EA85EE6F6379A15A51D364E53`
 
 PowerShell 校验示例：
 
