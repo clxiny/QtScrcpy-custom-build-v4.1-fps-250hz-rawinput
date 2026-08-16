@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Layer KeyMap Editor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">QtScrcpy</p>
+        <h1>Layer KeyMap Editor</h1>
+      </div>
+      <div class="header-actions">
+        <label class="command-button" title="Import a KeyMap JSON file">
+          Import JSON
+          <input id="file-input" type="file" accept="application/json,.json" hidden>
+        </label>
+        <button id="sample-button" class="quiet-button" type="button">Sample</button>
+        <button id="export-button" class="command-button" type="button">Export JSON</button>
+      </div>
+    </header>
+
+    <aside class="sidebar left-sidebar">
+      <section class="panel-section">
+        <div class="section-heading">
+          <h2>Layers</h2>
+          <button id="convert-button" class="icon-button" type="button" title="Convert a legacy single-layer map to layers">&#8645;</button>
+        </div>
+        <div id="layer-list" class="layer-list"></div>
+        <div class="inline-form">
+          <input id="new-layer-name" type="text" spellcheck="false" placeholder="new layer">
+          <button id="add-layer-button" class="icon-button positive" type="button" title="Add layer">+</button>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h2>Layer Settings</h2>
+        <label class="field-label" for="default-layer">Default layer</label>
+        <select id="default-layer"></select>
+        <label class="field-label" for="parent-layer">Parent layer</label>
+        <select id="parent-layer"></select>
+        <div class="layer-actions">
+          <button id="duplicate-layer-button" class="quiet-button" type="button">Duplicate</button>
+          <button id="delete-layer-button" class="danger-button" type="button">Delete</button>
+        </div>
+      </section>
+
+      <section class="panel-section fps-fields">
+        <h2>FPS View</h2>
+        <div class="two-columns">
+          <label><span>Start X</span><input id="view-start-x" type="number" min="0" max="1" step="0.0001"></label>
+          <label><span>Start Y</span><input id="view-start-y" type="number" min="0" max="1" step="0.0001"></label>
+          <label><span>Speed X</span><input id="view-speed-x" type="number" min="0.001" step="0.01"></label>
+          <label><span>Speed Y</span><input id="view-speed-y" type="number" min="0.001" step="0.01"></label>
+        </div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <div class="workspace-toolbar">
+        <div id="active-layer-label" class="active-layer-label"></div>
+        <div class="toolbar-actions">
+          <button id="add-click-button" class="quiet-button" type="button">Add Click</button>
+          <button id="fit-button" class="icon-button" type="button" title="Fit board">&#10530;</button>
+        </div>
+      </div>
+      <div id="board-wrap" class="board-wrap">
+        <div id="board" class="board" aria-label="KeyMap layout board">
+          <div class="crosshair horizontal"></div>
+          <div class="crosshair vertical"></div>
+          <div id="node-layer" class="node-layer"></div>
+        </div>
+      </div>
+      <footer class="workspace-footer">
+        <span id="file-label">Unsaved map</span>
+        <span id="validation-label"></span>
+      </footer>
+    </main>
+
+    <aside class="sidebar right-sidebar">
+      <section class="panel-section selected-panel">
+        <h2>Selected Binding</h2>
+        <div id="empty-selection" class="empty-state">No binding selected</div>
+        <form id="binding-form" class="binding-form" hidden>
+          <label class="field-label" for="node-type">Type</label>
+          <select id="node-type">
+            <option value="KMT_CLICK">Click</option>
+            <option value="KMT_CLICK_TWICE">Double Click</option>
+            <option value="KMT_DRAG">Drag</option>
+            <option value="KMT_STEER_WHEEL">Steer Wheel</option>
+          </select>
+
+          <label class="field-label" for="binding-key">Binding</label>
+          <input id="binding-key" type="text" spellcheck="false">
+
+          <div class="two-columns position-fields">
+            <label><span>X</span><input id="position-x" type="number" min="0" max="1" step="0.0001"></label>
+            <label><span>Y</span><input id="position-y" type="number" min="0" max="1" step="0.0001"></label>
+          </div>
+
+          <label class="field-label" for="switch-layer">Switch layer after release</label>
+          <select id="switch-layer"></select>
+
+          <label id="switch-map-row" class="check-row">
+            <input id="switch-map" type="checkbox">
+            <span>Legacy switchMap</span>
+          </label>
+        </form>
+      </section>
+
+      <section class="panel-section">
+        <h2>Validation</h2>
+        <ul id="validation-list" class="validation-list"></ul>
+      </section>
+    </aside>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

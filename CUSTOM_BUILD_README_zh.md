@@ -45,6 +45,7 @@
    - Layer 切换不会调用 `switchGameMap()`，不会重建 UHID、重新捕获鼠标、清空 FPS 视角或改变 Raw Input/250Hz 合并发送路径。仅会取消旧 Layer 尚未执行的多段点击、拖拽和方向盘延迟动作，避免它们在新 Layer 产生残留触摸。
    - 重新加载 KeyMap 或重新进入 FPS 模式时会回到 `defaultLayer`。非法父 Layer 或 `switchLayer` 目标会被拒绝并输出日志。
    - 参考配置：`keymap/layer-example.json`。其中坐标仅用于展示机制，不能直接视为任何游戏的实际坐标。
+   - 离线可视化编辑器位于 `tools/layer-keymap-editor/`：直接打开 `index.html`，或运行 `node server.js` 后访问本机预览。它支持旧单层和新的 Layer JSON、点位拖动、Layer 切换字段编辑、配置校验和本地 JSON 导出。
 
 ## 目录说明
 
