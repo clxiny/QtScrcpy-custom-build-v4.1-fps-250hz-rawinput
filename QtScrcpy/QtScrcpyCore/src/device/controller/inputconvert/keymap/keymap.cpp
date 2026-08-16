@@ -14,11 +14,122 @@ KeyMap::~KeyMap() {}
 
 void KeyMap::loadKeyMap(const QString &json)
 {
+    QJsonParseError jsonError;
+    const QJsonDocument jsonDoc = QJsonDocument::fromJson(json.toUtf8(), &jsonError);
+    if (jsonError.error != QJsonParseError::NoError || !jsonDoc.isObject()) {
+        qWarning() << "json error:" << (jsonError.error == QJsonParseError::NoError
+                                              ? QString("root must be a json object")
+                                              : jsonError.errorString());
+        return;
+    }
+
+    const QJsonObject rootObj = jsonDoc.object();
+    m_layers.clear();
+    m_defaultLayer.clear();
+    m_currentLayer.clear();
+    m_hasLayerConfig = rootObj.contains("layers");
+
+    if (!m_hasLayerConfig) {
+        loadSingleLayerJson(json);
+        LayerDefinition layer;
+        captureActiveLayer(layer);
+        m_layers.insert(QStringLiteral("default"), layer);
+        m_defaultLayer = QStringLiteral("default");
+        m_currentLayer = m_defaultLayer;
+        qInfo() << "KeyMap loaded without layers; current keymap layer:" << m_currentLayer;
+        return;
+    }
+
+    if (!checkItemString(rootObj, "switchKey")) {
+        qWarning() << "json error: layered keymap requires switchKey";
+        return;
+    }
+    if (!rootObj.value("layers").isObject()) {
+        qWarning() << "json error: layers must be a json object";
+        return;
+    }
+
+    const QJsonObject layersObj = rootObj.value("layers").toObject();
+    if (layersObj.isEmpty()) {
+        qWarning() << "json error: layers must not be empty";
+        return;
+    }
+
+    QString firstLayer;
+    for (auto it = layersObj.constBegin(); it != layersObj.constEnd(); ++it) {
+        if (!it.value().isObject()) {
+            qWarning() << "json error: layer must be a json object:" << it.key();
+            continue;
+        }
+
+        QJsonObject layerObj = it.value().toObject();
+        if (layerObj.contains("parent") && !layerObj.value("parent").isString()) {
+            qWarning() << "json error: layer parent must be a string:" << it.key();
+            continue;
+        }
+
+        KeyMap layerParser;
+        layerObj.insert("switchKey", rootObj.value("switchKey"));
+        layerObj.remove("parent");
+        layerParser.loadSingleLayerJson(QJsonDocument(layerObj).toJson(QJsonDocument::Compact));
+
+        LayerDefinition layer;
+        layer.parent = it.value().toObject().value("parent").toString();
+        layerParser.captureActiveLayer(layer);
+        m_layers.insert(it.key(), layer);
+        if (firstLayer.isEmpty()) {
+            firstLayer = it.key();
+            m_switchKey = layerParser.m_switchKey;
+        }
+    }
+
+    if (m_layers.isEmpty()) {
+        qWarning() << "json error: no valid keymap layers";
+        return;
+    }
+
+    for (auto it = m_layers.constBegin(); it != m_layers.constEnd(); ++it) {
+        if (!it.value().parent.isEmpty() && !m_layers.contains(it.value().parent)) {
+            qWarning() << "json error: layer parent does not exist:" << it.key() << it.value().parent;
+            m_layers.clear();
+            return;
+        }
+        for (const KeyMapNode &node : it.value().nodes) {
+            if (!node.switchLayer.isEmpty() && !m_layers.contains(node.switchLayer)) {
+                qWarning() << "json error: switchLayer does not exist:" << it.key() << node.switchLayer;
+                m_layers.clear();
+                return;
+            }
+        }
+    }
+
+    m_defaultLayer = rootObj.value("defaultLayer").toString(firstLayer);
+    if (!m_layers.contains(m_defaultLayer)) {
+        qWarning() << "json error: defaultLayer does not exist:" << m_defaultLayer;
+        m_defaultLayer = firstLayer;
+    }
+    if (!switchLayer(m_defaultLayer)) {
+        qWarning() << "json error: failed to activate defaultLayer:" << m_defaultLayer;
+        return;
+    }
+
+    qInfo() << "Layered KeyMap loaded; default layer:" << m_defaultLayer
+            << "current layer:" << m_currentLayer;
+}
+
+void KeyMap::loadSingleLayerJson(const QString &json)
+{
     QString errorString;
     QJsonParseError jsonError;
     QJsonDocument jsonDoc;
     QJsonObject rootObj;
     QPair<ActionType, int> switchKey;
+
+    m_keyMapNodes.clear();
+    m_idxSteerWheel = -1;
+    m_idxMouseMove = -1;
+    m_rmapKey.clear();
+    m_rmapMouse.clear();
 
     jsonDoc = QJsonDocument::fromJson(json.toUtf8(), &jsonError);
 
@@ -167,6 +278,7 @@ void KeyMap::loadKeyMap(const QString &json)
                 keyMapNode.data.click.keyNode.pos = getItemPos(node, "pos");
                 keyMapNode.data.click.switchMap = getItemBool(node, "switchMap");
                 keyMapNode.data.click.keyNode.androidKey = static_cast<AndroidKeycode>(getItemDouble(node, "androidKey"));
+                applyLayerAction(node, keyMapNode);
                 m_keyMapNodes.push_back(keyMapNode);
             } break;
             case KeyMap::KMT_CLICK_TWICE: {
@@ -188,6 +300,7 @@ void KeyMap::loadKeyMap(const QString &json)
                 keyMapNode.data.click.keyNode.pos = getItemPos(node, "pos");
                 keyMapNode.data.click.switchMap = getItemBool(node, "switchMap");
                 keyMapNode.data.click.keyNode.androidKey = static_cast<AndroidKeycode>(getItemDouble(node, "androidKey"));
+                applyLayerAction(node, keyMapNode);
                 m_keyMapNodes.push_back(keyMapNode);
             } break;
             case KeyMap::KMT_CLICK_MULTI: {
@@ -223,6 +336,7 @@ void KeyMap::loadKeyMap(const QString &json)
                     keyMapNode.data.clickMulti.keyNode.delayClickNodesCount++;
                 }
 
+                applyLayerAction(node, keyMapNode);
                 m_keyMapNodes.push_back(keyMapNode);
             } break;
             case KeyMap::KMT_STEER_WHEEL: {
@@ -260,6 +374,7 @@ void KeyMap::loadKeyMap(const QString &json)
                 keyMapNode.data.steerWheel.down = { downKey.first, downKey.second, QPointF(0, 0), QPointF(0, 0), getItemDouble(node, "downOffset") };
 
                 keyMapNode.data.steerWheel.centerPos = getItemPos(node, "centerPos");
+                applyLayerAction(node, keyMapNode);
                 m_idxSteerWheel = m_keyMapNodes.size();
                 m_keyMapNodes.push_back(keyMapNode);
             } break;
@@ -286,6 +401,7 @@ void KeyMap::loadKeyMap(const QString &json)
                     static_cast<quint32>(getItemDouble(node, "startDelay")) : 0;
                 keyMapNode.data.drag.dragSpeed = node.contains("dragSpeed") ? 
                     static_cast<float>(getItemDouble(node, "dragSpeed")) : 1.0f;
+                applyLayerAction(node, keyMapNode);
                 m_keyMapNodes.push_back(keyMapNode);
                 break;
             }
@@ -306,6 +422,7 @@ void KeyMap::loadKeyMap(const QString &json)
                 keyMapNode.data.androidKey.keyNode.type = key.first;
                 keyMapNode.data.androidKey.keyNode.key = key.second;
                 keyMapNode.data.androidKey.keyNode.androidKey = static_cast<AndroidKeycode>(getItemDouble(node, "androidKey"));
+                applyLayerAction(node, keyMapNode);
                 m_keyMapNodes.push_back(keyMapNode);
             } break;
             default:
@@ -316,8 +433,6 @@ void KeyMap::loadKeyMap(const QString &json)
     }
     // this must be called after m_keyMapNodes is stable
     makeReverseMap();
-    qInfo() << "Script updated, current keymap mode:normal, Press ~ key to switch keymap mode";
-
 parseError:
     if (!errorString.isEmpty()) {
         qWarning() << errorString;
@@ -369,6 +484,119 @@ bool KeyMap::isValidSteerWheelMap()
     return m_idxSteerWheel != -1;
 }
 
+bool KeyMap::hasLayers() const
+{
+    return m_hasLayerConfig;
+}
+
+QString KeyMap::defaultLayer() const
+{
+    return m_defaultLayer;
+}
+
+QString KeyMap::currentLayer() const
+{
+    return m_currentLayer;
+}
+
+bool KeyMap::switchLayer(const QString &layerName)
+{
+    if (!m_layers.contains(layerName)) {
+        qWarning() << "Rejected keymap layer switch; unknown layer:" << layerName;
+        return false;
+    }
+
+    const QVector<KeyMapNode> oldNodes = m_keyMapNodes;
+    const int oldSteerWheel = m_idxSteerWheel;
+    const int oldMouseMove = m_idxMouseMove;
+    const QString oldLayer = m_currentLayer;
+
+    m_keyMapNodes.clear();
+    m_idxSteerWheel = -1;
+    m_idxMouseMove = -1;
+    QSet<QString> visiting;
+    if (!buildActiveLayer(layerName, visiting)) {
+        m_keyMapNodes = oldNodes;
+        m_idxSteerWheel = oldSteerWheel;
+        m_idxMouseMove = oldMouseMove;
+        m_currentLayer = oldLayer;
+        makeReverseMap();
+        return false;
+    }
+
+    m_currentLayer = layerName;
+    makeReverseMap();
+    qInfo() << "KeyMap layer switched to:" << m_currentLayer;
+    return true;
+}
+
+bool KeyMap::toggleLayer()
+{
+    if (m_currentLayer == m_defaultLayer) {
+        return false;
+    }
+    return switchLayer(m_defaultLayer);
+}
+
+void KeyMap::resetLayer()
+{
+    if (!m_defaultLayer.isEmpty() && m_currentLayer != m_defaultLayer) {
+        switchLayer(m_defaultLayer);
+    }
+}
+
+bool KeyMap::buildActiveLayer(const QString &layerName, QSet<QString> &visiting)
+{
+    if (visiting.contains(layerName)) {
+        qWarning() << "json error: keymap layer inheritance cycle at:" << layerName;
+        return false;
+    }
+
+    const auto layerIt = m_layers.constFind(layerName);
+    if (layerIt == m_layers.constEnd()) {
+        qWarning() << "json error: keymap layer parent does not exist:" << layerName;
+        return false;
+    }
+
+    visiting.insert(layerName);
+    const LayerDefinition &layer = layerIt.value();
+    if (!layer.parent.isEmpty() && !buildActiveLayer(layer.parent, visiting)) {
+        return false;
+    }
+    visiting.remove(layerName);
+
+    const int startIndex = m_keyMapNodes.size();
+    m_keyMapNodes += layer.nodes;
+    if (layer.idxSteerWheel >= 0) {
+        m_idxSteerWheel = startIndex + layer.idxSteerWheel;
+    }
+    if (layer.idxMouseMove >= 0) {
+        m_idxMouseMove = startIndex + layer.idxMouseMove;
+    }
+    return true;
+}
+
+void KeyMap::captureActiveLayer(LayerDefinition &layer) const
+{
+    layer.nodes = m_keyMapNodes;
+    layer.idxSteerWheel = m_idxSteerWheel;
+    layer.idxMouseMove = m_idxMouseMove;
+}
+
+void KeyMap::applyLayerAction(const QJsonObject &jsonNode, KeyMapNode &keyMapNode)
+{
+    if (checkItemString(jsonNode, "switchLayer")) {
+        keyMapNode.switchLayer = getItemString(jsonNode, "switchLayer");
+    }
+    if (jsonNode.contains("toggleLayer")) {
+        if (!checkItemBool(jsonNode, "toggleLayer")) {
+            qWarning() << "json error: toggleLayer must be bool";
+        } else {
+            keyMapNode.toggleLayer = getItemBool(jsonNode, "toggleLayer");
+        }
+    }
+}
+
 void KeyMap::makeReverseMap()
 {
     m_rmapKey.clear();
@@ -377,33 +605,33 @@ void KeyMap::makeReverseMap()
         auto &node = m_keyMapNodes[i];
         switch (node.type) {
         case KMT_CLICK: {
-            QMultiHash<int, KeyMapNode *> &m = node.data.click.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &m = node.data.click.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             m.insert(node.data.click.keyNode.key, &node);
         } break;
         case KMT_CLICK_TWICE: {
-            QMultiHash<int, KeyMapNode *> &m = node.data.clickTwice.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &m = node.data.clickTwice.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             m.insert(node.data.clickTwice.keyNode.key, &node);
         } break;
         case KMT_CLICK_MULTI: {
-            QMultiHash<int, KeyMapNode *> &m = node.data.clickMulti.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &m = node.data.clickMulti.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             m.insert(node.data.clickMulti.keyNode.key, &node);
         } break;
         case KMT_STEER_WHEEL: {
-            QMultiHash<int, KeyMapNode *> &ml = node.data.steerWheel.left.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &ml = node.data.steerWheel.left.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             ml.insert(node.data.steerWheel.left.key, &node);
-            QMultiHash<int, KeyMapNode *> &mr = node.data.steerWheel.right.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &mr = node.data.steerWheel.right.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             mr.insert(node.data.steerWheel.right.key, &node);
-            QMultiHash<int, KeyMapNode *> &mu = node.data.steerWheel.up.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &mu = node.data.steerWheel.up.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             mu.insert(node.data.steerWheel.up.key, &node);
-            QMultiHash<int, KeyMapNode *> &md = node.data.steerWheel.down.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &md = node.data.steerWheel.down.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             md.insert(node.data.steerWheel.down.key, &node);
         } break;
         case KMT_DRAG: {
-            QMultiHash<int, KeyMapNode *> &m = node.data.drag.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &m = node.data.drag.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             m.insert(node.data.drag.keyNode.key, &node);
         } break;
         case KMT_ANDROID_KEY: {
-            QMultiHash<int, KeyMapNode *> &m = node.data.androidKey.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
+            QHash<int, KeyMapNode *> &m = node.data.androidKey.keyNode.type == AT_KEY ? m_rmapKey : m_rmapMouse;
             m.insert(node.data.androidKey.keyNode.key, &node);
         } break;
         default:

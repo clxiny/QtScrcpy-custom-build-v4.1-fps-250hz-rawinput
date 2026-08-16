@@ -3,8 +3,6 @@ name: Build QtScrcpy custom v4.1 input-recovery Windows x64
 on:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/custom-windows-x64.yml"
   workflow_dispatch:
 
 permissions:

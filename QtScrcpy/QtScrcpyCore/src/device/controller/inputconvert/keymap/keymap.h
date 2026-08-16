@@ -2,11 +2,12 @@
 #define KEYMAP_H
 #include <QJsonObject>
 #include <QMetaEnum>
-#include <QMultiHash>
 #include <QObject>
 #include <QPair>
 #include <QPointF>
 #include <QRectF>
+#include <QHash>
+#include <QSet>
 #include <QVector>
 
 #include "keycodes.h"
@@ -110,6 +111,11 @@ public:
             ~DATA() {}
         } data;
 
+        // Kept separate from switchMap: this is a lightweight PC-side
+        // keymap-layer transition that is applied after the source action.
+        QString switchLayer;
+        bool toggleLayer = false;
+
         KeyMapNode() {}
         ~KeyMapNode() {}
     };
@@ -128,7 +134,27 @@ public:
     bool isValidSteerWheelMap();
     const KeyMap::KeyMapNode &getMouseMoveMap();
 
+    bool hasLayers() const;
+    QString defaultLayer() const;
+    QString currentLayer() const;
+    bool switchLayer(const QString &layerName);
+    bool toggleLayer();
+    void resetLayer();
+
 private:
+    struct LayerDefinition
+    {
+        QString parent;
+        QVector<KeyMapNode> nodes;
+        int idxSteerWheel = -1;
+        int idxMouseMove = -1;
+    };
+
+    void loadSingleLayerJson(const QString &json);
+    bool buildActiveLayer(const QString &layerName, QSet<QString> &visiting);
+    void captureActiveLayer(LayerDefinition &layer) const;
+    void applyLayerAction(const QJsonObject &jsonNode, KeyMapNode &keyMapNode);
+
     // set up the reverse map from key/event event to keyMapNode
     void makeReverseMap();
 
@@ -162,6 +188,10 @@ private:
 
     QVector<KeyMapNode> m_keyMapNodes;
     KeyNode m_switchKey = { AT_KEY, Qt::Key_QuoteLeft };
+    QHash<QString, LayerDefinition> m_layers;
+    QString m_defaultLayer;
+    QString m_currentLayer;
+    bool m_hasLayerConfig = false;
 
     // just for return
     KeyMapNode m_invalidNode;
@@ -177,8 +207,8 @@ private:
     QMetaEnum m_metaEnumMouseButtons = QMetaEnum::fromType<Qt::MouseButtons>();
     QMetaEnum m_metaEnumKeyMapType = QMetaEnum::fromType<KeyMap::KeyMapType>();
     // reverse map of key/mouse event
-    QMultiHash<int, KeyMapNode *> m_rmapKey;
-    QMultiHash<int, KeyMapNode *> m_rmapMouse;
+    QHash<int, KeyMapNode *> m_rmapKey;
+    QHash<int, KeyMapNode *> m_rmapMouse;
 };
 
 #endif // KEYMAP_H

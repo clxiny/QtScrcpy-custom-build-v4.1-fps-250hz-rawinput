@@ -3,6 +3,7 @@
 
 #include <QPointF>
 #include <QQueue>
+#include <QHash>
 
 #include "inputconvertnormal.h"
 #include "keymap.h"
@@ -47,7 +48,8 @@ protected:
     void processKeyClick(const QPointF &clickPos, bool clickTwice, bool switchMap, const QKeyEvent *from);
 
     // click mutil
-    void processKeyClickMulti(const KeyMap::DelayClickNode *nodes, const int count, const QKeyEvent *from);
+    void processKeyClickMulti(const KeyMap::DelayClickNode *nodes, const int count, const QKeyEvent *from,
+                              quint64 layerEpoch);
 
     // drag
     void processKeyDrag(const QPointF &startPos, QPointF endPos, quint32 startDelay, float dragSpeed, const QKeyEvent *from);
@@ -69,6 +71,8 @@ protected:
     void stopMouseMoveTimer();
     void scheduleMouseMoveTouchRestart(int delayMs);
     void resetMouseMoveForModeSwitch();
+    void applyLayerAction(const KeyMap::KeyMapNode &node);
+    void cancelLayerDelayedActions();
 
     bool switchGameMap();
     bool checkCursorPos(const QMouseEvent *from);
@@ -97,6 +101,10 @@ private:
     bool m_processMouseMove = true;
     quint64 m_mouseMoveRestartEpoch = 0;
     quint64 m_inputResetEpoch = 0;
+    quint64 m_layerEpoch = 0;
+    QHash<int, KeyMap::KeyMapNode> m_pressedKeyNodes;
+    QHash<int, KeyMap::KeyMapNode> m_pressedMouseNodes;
+    QHash<int, QPointF> m_multiClickTouchPositions;
 
     // steer wheel
     struct

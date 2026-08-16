@@ -1,0 +1,63 @@
+{
+  "switchKey": "Key_QuoteLeft",
+  "defaultLayer": "combat",
+  "layers": {
+    "combat": {
+      "mouseMoveMap": {
+        "startPos": { "x": 0.50, "y": 0.50 },
+        "speedRatioX": 3.25,
+        "speedRatioY": 1.25
+      },
+      "keyMapNodes": [
+        {
+          "comment": "Base movement shared by child layers",
+          "type": "KMT_STEER_WHEEL",
+          "centerPos": { "x": 0.20, "y": 0.75 },
+          "leftOffset": 0.10,
+          "rightOffset": 0.10,
+          "upOffset": 0.10,
+          "downOffset": 0.10,
+          "leftKey": "Key_A",
+          "rightKey": "Key_D",
+          "upKey": "Key_W",
+          "downKey": "Key_S"
+        },
+        {
+          "comment": "Example primary action in the default layer",
+          "type": "KMT_CLICK",
+          "key": "LeftButton",
+          "pos": { "x": 0.70, "y": 0.70 },
+          "switchMap": false
+        },
+        {
+          "comment": "Perform this touch, then enter the alternate layer on release",
+          "type": "KMT_CLICK",
+          "key": "Key_E",
+          "pos": { "x": 0.85, "y": 0.55 },
+          "switchMap": false,
+          "switchLayer": "alternate"
+        }
+      ]
+    },
+    "alternate": {
+      "parent": "combat",
+      "keyMapNodes": [
+        {
+          "comment": "The same mouse button overrides the parent only in this layer",
+          "type": "KMT_CLICK",
+          "key": "LeftButton",
+          "pos": { "x": 0.35, "y": 0.40 },
+          "switchMap": false
+        },
+        {
+          "comment": "Perform this touch, then return to the default layer on release",
+          "type": "KMT_CLICK",
+          "key": "Key_E",
+          "pos": { "x": 0.85, "y": 0.55 },
+          "switchMap": false,
+          "switchLayer": "combat"
+        }
+      ]
+    }
+  }
+}

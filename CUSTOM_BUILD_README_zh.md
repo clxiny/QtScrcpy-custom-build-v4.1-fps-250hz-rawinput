@@ -37,6 +37,15 @@
    - 如仍遇到异常，直接按 `Ctrl+Shift+R` 手动复位输入，不会断开投屏、不会重启平板；下一次鼠标移动会自动重建系统指针设备。
    - 服务端只在确实发现 scrcpy 残留触点时输出一条恢复日志，正常点击不会持续刷 adb 日志。
 
+4. 通用多层 KeyMap（PC 客户端）
+   - 旧版单层 JSON 保持兼容：不含 `layers` 时仍按原来的 `switchKey`、`mouseMoveMap` 和 `keyMapNodes` 解析。
+   - 新配置可使用顶层 `defaultLayer` 与 `layers` 对象。每个 Layer 可以用可选的 `parent` 指向基础 Layer；子层没有定义的物理键自动回退到父层，避免重复填写 WASD、视角等基础映射。
+   - 节点上的 `switchLayer` 是独立于旧 `switchMap` 的字符串目标层。触发键会先完成自身的手机 DOWN/UP 操作，再在 KeyRelease 时切换 Layer；`switchMap` 仍只用于原有的 FPS/UHID 鼠标显示切换。
+   - 同一物理键在不同 Layer 可以使用不同触摸坐标。客户端会在 DOWN 时锁存命中的节点，后续 UP 始终使用同一节点，因此 Layer 已经变化也不会把触点释放到另一个坐标。
+   - Layer 切换不会调用 `switchGameMap()`，不会重建 UHID、重新捕获鼠标、清空 FPS 视角或改变 Raw Input/250Hz 合并发送路径。仅会取消旧 Layer 尚未执行的多段点击、拖拽和方向盘延迟动作，避免它们在新 Layer 产生残留触摸。
+   - 重新加载 KeyMap 或重新进入 FPS 模式时会回到 `defaultLayer`。非法父 Layer 或 `switchLayer` 目标会被拒绝并输出日志。
+   - 参考配置：`keymap/layer-example.json`。其中坐标仅用于展示机制，不能直接视为任何游戏的实际坐标。
+
 ## 目录说明
 
 - `QtScrcpy/`：已修改的 QtScrcpy 客户端源码。

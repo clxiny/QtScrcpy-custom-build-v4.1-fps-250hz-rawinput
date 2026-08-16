@@ -117,7 +117,18 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
         return;
     }
 
-    const KeyMap::KeyMapNode &node = m_keyMap.getKeyMapNodeKey(from->key());
+    KeyMap::KeyMapNode node;
+    bool haveLatchedNode = false;
+    if (QEvent::KeyRelease == from->type()) {
+        const auto pressedNode = m_pressedKeyNodes.constFind(from->key());
+        if (pressedNode != m_pressedKeyNodes.constEnd()) {
+            node = pressedNode.value();
+            haveLatchedNode = true;
+        }
+    }
+    if (!haveLatchedNode) {
+        node = m_keyMap.getKeyMapNodeKey(from->key());
+    }
     // 处理特殊按键：可以释放出鼠标的按键
     if (m_needBackMouseMove && KeyMap::KMT_CLICK == node.type && node.data.click.switchMap) {
         updateSize(frameSize, showSize);
@@ -130,6 +141,13 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
         updateSize(frameSize, showSize);
         if (!from || from->isAutoRepeat()) {
             return;
+        }
+
+        if (QEvent::KeyPress == from->type() && KeyMap::KMT_INVALID != node.type) {
+            // Keep the mapping selected on DOWN until its matching UP. A layer
+            // can legally remap the same physical key, but it must not move an
+            // already-pressed touch to a different coordinate on release.
+            m_pressedKeyNodes.insert(from->key(), node);
         }
 
         // small eyes
@@ -158,25 +176,52 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
         // 处理方向盘
         case KeyMap::KMT_STEER_WHEEL:
             processSteerWheel(node, from);
+            if (QEvent::KeyRelease == from->type()) {
+                applyLayerAction(node);
+                m_pressedKeyNodes.remove(from->key());
+            }
             return;
         // 处理普通按键
         case KeyMap::KMT_CLICK:
             processKeyClick(node.data.click.keyNode.pos, false, node.data.click.switchMap, from);
             processAndroidKey(node.data.click.keyNode.androidKey, from);
+            if (QEvent::KeyRelease == from->type()) {
+                applyLayerAction(node);
+                m_pressedKeyNodes.remove(from->key());
+            }
             return;
         case KeyMap::KMT_CLICK_TWICE:
             processKeyClick(node.data.clickTwice.keyNode.pos, true, false, from);
             processAndroidKey(node.data.clickTwice.keyNode.androidKey, from);
+            if (QEvent::KeyRelease == from->type()) {
+                applyLayerAction(node);
+                m_pressedKeyNodes.remove(from->key());
+            }
             return;
         case KeyMap::KMT_CLICK_MULTI:
-            processKeyClickMulti(node.data.clickMulti.keyNode.delayClickNodes, node.data.clickMulti.keyNode.delayClickNodesCount, from);
+            processKeyClickMulti(node.data.clickMulti.keyNode.delayClickNodes,
+                                 node.data.clickMulti.keyNode.delayClickNodesCount, from,
+                                 m_layerEpoch);
+            if (QEvent::KeyRelease == from->type()) {
+                applyLayerAction(node);
+                m_pressedKeyNodes.remove(from->key());
+            }
             return;
         case KeyMap::KMT_DRAG:
             processKeyDrag(node.data.drag.keyNode.pos, node.data.drag.keyNode.extendPos,
                          node.data.drag.startDelay, node.data.drag.dragSpeed, from);
+            if (QEvent::KeyRelease == from->type()) {
+                applyLayerAction(node);
+                m_pressedKeyNodes.remove(from->key());
+            }
             return;
         case KeyMap::KMT_ANDROID_KEY:
             processAndroidKey(node.data.androidKey.keyNode.androidKey, from);
+            if (QEvent::KeyRelease == from->type()) {
+                applyLayerAction(node);
+                m_pressedKeyNodes.remove(from->key());
+            }
+            return;
         default:
             break;
         }
@@ -192,7 +237,12 @@ bool InputConvertGame::isCurrentCustomKeymap()
 
 void InputConvertGame::loadKeyMap(const QString &json)
 {
+    // Reloading changes the meaning of physical keys. Drop outstanding local
+    // state and ask the server to cancel any old injected pointers first.
+    resetInputState();
+    requestAndroidInputStateReset();
     m_keyMap.loadKeyMap(json);
+    m_keyMap.resetLayer();
 }
 
 void InputConvertGame::resetInputState()
@@ -204,6 +254,10 @@ void InputConvertGame::resetInputState()
     // touch after the user has requested recovery.
     ++m_inputResetEpoch;
     ++m_mouseMoveRestartEpoch;
+    ++m_layerEpoch;
+    m_pressedKeyNodes.clear();
+    m_pressedMouseNodes.clear();
+    m_multiClickTouchPositions.clear();
 
     if (m_ctrlMouseMove.flushTimer) {
         m_ctrlMouseMove.flushTimer->stop();
@@ -486,8 +540,11 @@ void InputConvertGame::processSteerWheel(const KeyMap::KeyMapNode &node, const Q
             m_ctrlSteerWheel.delayData.queuePos.clear();
         }
 
-        sendTouchUpEvent(getTouchID(m_ctrlSteerWheel.touchKey), m_ctrlSteerWheel.delayData.currentPos);
-        detachTouchID(m_ctrlSteerWheel.touchKey);
+        const int touchId = getTouchID(m_ctrlSteerWheel.touchKey);
+        if (touchId >= 0) {
+            sendTouchUpEvent(touchId, m_ctrlSteerWheel.delayData.currentPos);
+            detachTouchID(m_ctrlSteerWheel.touchKey);
+        }
         return;
     }
 
@@ -542,7 +599,8 @@ void InputConvertGame::processKeyClick(const QPointF &clickPos, bool clickTwice,
     }
 }
 
-void InputConvertGame::processKeyClickMulti(const KeyMap::DelayClickNode *nodes, const int count, const QKeyEvent *from)
+void InputConvertGame::processKeyClickMulti(const KeyMap::DelayClickNode *nodes, const int count,
+                                            const QKeyEvent *from, quint64 layerEpoch)
 {
     if (QEvent::KeyPress != from->type()) {
         return;
@@ -556,23 +614,30 @@ void InputConvertGame::processKeyClickMulti(const KeyMap::DelayClickNode *nodes,
     for (int i = 0; i < count; i++) {
         delay += nodes[i].delay;
         clickPos = nodes[i].pos;
-        QTimer::singleShot(delay, this, [this, key, clickPos, resetEpoch]() {
-            if (resetEpoch != m_inputResetEpoch || !m_gameMap) {
+        QTimer::singleShot(delay, this, [this, key, clickPos, resetEpoch, layerEpoch]() {
+            if (resetEpoch != m_inputResetEpoch || layerEpoch != m_layerEpoch || !m_gameMap) {
                 return;
             }
             int id = attachTouchID(key);
             sendTouchDownEvent(id, clickPos);
+            if (id >= 0) {
+                m_multiClickTouchPositions.insert(key, clickPos);
+            }
         });
 
         // Don't up it too fast
         delay += 20;
-        QTimer::singleShot(delay, this, [this, key, clickPos, resetEpoch]() {
-            if (resetEpoch != m_inputResetEpoch || !m_gameMap) {
+        QTimer::singleShot(delay, this, [this, key, clickPos, resetEpoch, layerEpoch]() {
+            if (resetEpoch != m_inputResetEpoch || layerEpoch != m_layerEpoch || !m_gameMap) {
                 return;
             }
-            int id = getTouchID(key);
-            sendTouchUpEvent(id, clickPos);
-            detachTouchID(key);
+            const auto active = m_multiClickTouchPositions.constFind(key);
+            if (active != m_multiClickTouchPositions.constEnd()) {
+                int id = getTouchID(key);
+                sendTouchUpEvent(id, active.value());
+                detachTouchID(key);
+                m_multiClickTouchPositions.remove(key);
+            }
         });
     }
 }
@@ -677,20 +742,27 @@ void InputConvertGame::processAndroidKey(AndroidKeycode androidKey, const QKeyEv
 
 bool InputConvertGame::processMouseClick(const QMouseEvent *from)
 {
-    const KeyMap::KeyMapNode &node = m_keyMap.getKeyMapNodeMouse(from->button());
-    if (KeyMap::KMT_INVALID == node.type) {
-        return false;
-    }
-
     if (QEvent::MouseButtonPress == from->type() || QEvent::MouseButtonDblClick == from->type()) {
+        const KeyMap::KeyMapNode &node = m_keyMap.getKeyMapNodeMouse(from->button());
+        if (KeyMap::KMT_CLICK != node.type) {
+            return false;
+        }
+        m_pressedMouseNodes.insert(from->button(), node);
         int id = attachTouchID(from->button());
         sendTouchDownEvent(id, node.data.click.keyNode.pos);
         return true;
     }
     if (QEvent::MouseButtonRelease == from->type()) {
+        const auto pressedNode = m_pressedMouseNodes.constFind(from->button());
+        if (pressedNode == m_pressedMouseNodes.constEnd()) {
+            return false;
+        }
+        const KeyMap::KeyMapNode &node = pressedNode.value();
         int id = getTouchID(from->button());
         sendTouchUpEvent(id, node.data.click.keyNode.pos);
         detachTouchID(from->button());
+        applyLayerAction(node);
+        m_pressedMouseNodes.remove(from->button());
         return true;
     }
     return false;
@@ -956,6 +1028,76 @@ void InputConvertGame::scheduleMouseMoveTouchRestart(int delayMs)
     });
 }
 
+void InputConvertGame::applyLayerAction(const KeyMap::KeyMapNode &node)
+{
+    if (node.switchLayer.isEmpty() && !node.toggleLayer) {
+        return;
+    }
+
+    const QString previousLayer = m_keyMap.currentLayer();
+    bool switched = false;
+    if (!node.switchLayer.isEmpty()) {
+        switched = m_keyMap.switchLayer(node.switchLayer);
+    } else {
+        switched = m_keyMap.toggleLayer();
+    }
+
+    if (switched && previousLayer != m_keyMap.currentLayer()) {
+        // Layer changes are intentionally narrower than switchGameMap(): FPS
+        // raw mouse capture and its 250 Hz camera path stay untouched, while
+        // queued map-specific gestures from the old layer are canceled.
+        cancelLayerDelayedActions();
+    }
+}
+
+void InputConvertGame::cancelLayerDelayedActions()
+{
+    ++m_layerEpoch;
+
+    if (m_ctrlSteerWheel.delayData.timer) {
+        m_ctrlSteerWheel.delayData.timer->stop();
+    }
+    const int steerTouchId = getTouchID(m_ctrlSteerWheel.touchKey);
+    if (steerTouchId >= 0) {
+        sendTouchUpEvent(steerTouchId, m_ctrlSteerWheel.delayData.currentPos);
+        detachTouchID(m_ctrlSteerWheel.touchKey);
+    }
+    m_ctrlSteerWheel.pressedUp = false;
+    m_ctrlSteerWheel.pressedDown = false;
+    m_ctrlSteerWheel.pressedLeft = false;
+    m_ctrlSteerWheel.pressedRight = false;
+    m_ctrlSteerWheel.touchKey = Qt::Key_unknown;
+    m_ctrlSteerWheel.delayData.currentPos = QPointF();
+    m_ctrlSteerWheel.delayData.queuePos.clear();
+    m_ctrlSteerWheel.delayData.queueTimer.clear();
+    m_ctrlSteerWheel.delayData.pressedNum = 0;
+
+    for (auto it = m_multiClickTouchPositions.constBegin();
+         it != m_multiClickTouchPositions.constEnd(); ++it) {
+        const int touchId = getTouchID(it.key());
+        if (touchId >= 0) {
+            sendTouchUpEvent(touchId, it.value());
+            detachTouchID(it.key());
+        }
+    }
+    m_multiClickTouchPositions.clear();
+
+    if (m_dragDelayData.timer) {
+        m_dragDelayData.timer->stop();
+        const int dragTouchId = getTouchID(m_dragDelayData.pressKey);
+        if (dragTouchId >= 0) {
+            sendTouchUpEvent(dragTouchId, m_dragDelayData.currentPos);
+            detachTouchID(m_dragDelayData.pressKey);
+        }
+        delete m_dragDelayData.timer;
+        m_dragDelayData.timer = nullptr;
+    }
+    m_dragDelayData.currentPos = QPointF();
+    m_dragDelayData.queuePos.clear();
+    m_dragDelayData.queueTimer.clear();
+    m_dragDelayData.pressKey = 0;
+}
+
 void InputConvertGame::resetMouseMoveForModeSwitch()
 {
     // A mode transition is also a hard input boundary: keys may still be
@@ -970,6 +1112,9 @@ bool InputConvertGame::switchGameMap()
 {
     m_gameMap = !m_gameMap;
     resetMouseMoveForModeSwitch();
+    if (m_gameMap) {
+        m_keyMap.resetLayer();
+    }
     qInfo() << QString("current keymap mode: %1").arg(m_gameMap ? "custom" : "normal");
     if (m_gameMap) {
         qInfo() << "FPS mouse route: direct keymap touch injection (UHID bypassed)";
