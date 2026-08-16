@@ -1,0 +1,21 @@
+
+    QPair<ActionType, int> switchKey;
+    // switchKey
+    if (!checkItemString(rootObj, "switchKey")) {
+        errorString = QString("json error: no find switchKey");
+    switchKey = getItemKey(rootObj, "switchKey");
+    if (switchKey.first == AT_INVALID) {
+        errorString = QString("json error: switchKey invalid");
+    m_switchKey.type = switchKey.first;
+    m_switchKey.key = switchKey.second;
+            switch (type) {
+                keyMapNode.data.click.switchMap = getItemBool(node, "switchMap");
+                keyMapNode.data.click.switchMap = getItemBool(node, "switchMap");
+    qInfo() << "Script updated, current keymap mode:normal, Press ~ key to switch keymap mode";
+bool KeyMap::isSwitchOnKeyboard()
+    return m_switchKey.type == AT_KEY;
+int KeyMap::getSwitchKey()
+    return m_switchKey.key;
+        switch (node.type) {
+    return checkForClickTwice(node) && checkItemBool(node, "switchMap");
+
