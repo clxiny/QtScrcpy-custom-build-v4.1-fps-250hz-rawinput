@@ -139,10 +139,10 @@ Input state recovery requested
 
 ## Windows 构建包
 
-本仓库本身包含可构建的完整源码。已验证的 Windows x64 便携包作为 [v4.1.0-input-recovery-20260816-switchmap-uhid Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816-switchmap-uhid) 附件提供，下载后即可解压运行：
+本仓库本身包含可构建的完整源码。已验证的 Windows x64 便携包作为 [v4.1.0-input-recovery-20260816-fps-cursor-lock Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816-fps-cursor-lock) 附件提供，下载后即可解压运行：
 
 - 文件：`QtScrcpy-custom-v4.1-input-recovery-win-x64.zip`
-- SHA-256：`1ED243DF7F786AD142FC0679094C8CC8C3CF4A8EA85EE6F6379A15A51D364E53`
+- SHA-256：`4871BE9A66861A3D0299AA7A2BAB5EAC4157286644FD7DB633AE972AC0E93D49`
 - 内容：`QtScrcpy.exe`、Qt 运行库、ADB 组件、定制 `scrcpy-server` 和 `keymap/无畏契约幽影.json` 模板。
 
 下载后可用以下命令校验：
@@ -219,11 +219,11 @@ cmake --build build-custom --config RelWithDebInfo --parallel 8
 
 ## 版本与校验
 
-当前输入恢复发行版：**v4.1.0-input-recovery-20260816-switchmap-uhid**
+当前输入恢复发行版：**v4.1.0-input-recovery-20260816-fps-cursor-lock**
 
-- [GitHub Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816-switchmap-uhid)
+- [GitHub Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816-fps-cursor-lock)
 - 文件：`QtScrcpy-custom-v4.1-input-recovery-win-x64.zip`
-- SHA-256：`1ED243DF7F786AD142FC0679094C8CC8C3CF4A8EA85EE6F6379A15A51D364E53`
+- SHA-256：`4871BE9A66861A3D0299AA7A2BAB5EAC4157286644FD7DB633AE972AC0E93D49`
 
 PowerShell 校验示例：
 
