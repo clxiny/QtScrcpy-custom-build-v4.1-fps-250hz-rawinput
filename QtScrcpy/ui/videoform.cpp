@@ -265,6 +265,10 @@ void VideoForm::syncMousePassthroughForKeymapTransition(bool wasCustomKeymap)
     } else if (device->isCurrentCustomKeymap() && m_mousePassthrough) {
         // Android UHID drawing-tablet pointer -> direct FPS touch mapping.
         toggleMousePassthrough(true);
+        // Disabling UHID releases its Qt mouse grab and clears ClipCursor().
+        // switchGameMap() emitted grabCursor(true) just before this transition,
+        // so restore the FPS capture after the UHID cleanup has completed.
+        grabCursor(true);
     }
 }
 
