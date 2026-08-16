@@ -1,0 +1,377 @@
+{
+  "switchKey": "Key_QuoteLeft",
+  "defaultLayer": "base",
+  "layers": {
+    "base": {
+      "mouseMoveMap": {
+    "type": "KMT_MOUSE_MOVE",
+    "speedRatioX": 1,
+    "speedRatioY": 1,
+    "startPos": {
+      "x": 0.798,
+      "y": 0.694
+    },
+    "timedResetView": true
+      },
+      "keyMapNodes": [
+    {
+      "centerPos": {
+        "x": 0.132,
+        "y": 0.804
+      },
+      "downKey": "Key_S",
+      "downOffset": 0.07522,
+      "leftKey": "Key_A",
+      "leftOffset": 0.06314,
+      "rightKey": "Key_D",
+      "rightOffset": 0.06049,
+      "type": "KMT_STEER_WHEEL",
+      "upKey": "Key_W",
+      "upOffset": 0.07891,
+      "switchMap": false
+    },
+    {
+      "key": "Key_E",
+      "pos": {
+        "x": 0.855,
+        "y": 0.554
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "switchLayer": "secondary",
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_C",
+      "pos": {
+        "x": 0.789,
+        "y": 0.544
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_Q",
+      "pos": {
+        "x": 0.926,
+        "y": 0.554
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_R",
+      "pos": {
+        "x": 0.789,
+        "y": 0.903
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_3",
+      "pos": {
+        "x": 0.705,
+        "y": 0.93
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_X",
+      "pos": {
+        "x": 0.619,
+        "y": 0.932
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_Space",
+      "pos": {
+        "x": 0.91,
+        "y": 0.802
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_Control",
+      "pos": {
+        "x": 0.934,
+        "y": 0.941
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "MiddleButton",
+      "pos": {
+        "x": 0.861,
+        "y": 0.447
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "LeftButton",
+      "pos": {
+        "x": 0.18,
+        "y": 0.287
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "comment": "背包：松开 Tab 后释放或重新捕获鼠标",
+      "key": "Key_Tab",
+      "pos": {
+        "x": 0.501,
+        "y": 0.809
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": true,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_Shift",
+      "pos": {
+        "x": 0.867,
+        "y": 0.932
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_F",
+      "pos": {
+        "x": 0.704,
+        "y": 0.391
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_4",
+      "pos": {
+        "x": 0.704,
+        "y": 0.488
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_1",
+      "pos": {
+        "x": 0.47,
+        "y": 0.94
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "Key_2",
+      "pos": {
+        "x": 0.565,
+        "y": 0.94
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "RightButton",
+      "pos": {
+        "x": 0.929,
+        "y": 0.673
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "key": "ForwardButton",
+      "pos": {
+        "x": 0.925,
+        "y": 0.378
+      },
+      "resetMove": false,
+      "size": {
+        "height": 0.04,
+        "width": 0.027
+      },
+      "switchMap": false,
+      "type": "KMT_CLICK"
+    },
+    {
+      "comment": "",
+      "type": "KMT_CLICK",
+      "pos": {
+        "x": 0.5783,
+        "y": 0.5958
+      },
+      "key": "Key_Up",
+      "switchMap": false
+    },
+    {
+      "comment": "",
+      "type": "KMT_CLICK",
+      "pos": {
+        "x": 0.5766,
+        "y": 0.7123
+      },
+      "key": "Key_Down",
+      "switchMap": false
+    }
+      ]
+    },
+    "secondary": {
+      "mouseMoveMap": {
+        "type": "KMT_MOUSE_MOVE",
+        "speedRatioX": 1,
+        "speedRatioY": 1,
+        "startPos": {
+          "x": 0.798,
+          "y": 0.694
+        },
+        "timedResetView": true
+      },
+      "keyMapNodes": [
+        {
+          "centerPos": {
+            "x": 0.132,
+            "y": 0.804
+          },
+          "downKey": "Key_S",
+          "downOffset": 0.07522,
+          "leftKey": "Key_A",
+          "leftOffset": 0.06314,
+          "rightKey": "Key_D",
+          "rightOffset": 0.06049,
+          "type": "KMT_STEER_WHEEL",
+          "upKey": "Key_W",
+          "upOffset": 0.07891,
+          "switchMap": false
+        },
+        {
+          "key": "Key_E",
+          "pos": {
+            "x": 0.855,
+            "y": 0.554
+          },
+          "resetMove": false,
+          "size": {
+            "height": 0.04,
+            "width": 0.027
+          },
+          "switchMap": false,
+          "switchLayer": "base",
+          "type": "KMT_CLICK"
+        },
+        {
+          "comment": "Uses the base layer Key_Up position",
+          "key": "LeftButton",
+          "pos": {
+            "x": 0.5783,
+            "y": 0.5958
+          },
+          "switchMap": false,
+          "type": "KMT_CLICK"
+        },
+        {
+          "comment": "Uses the base layer Key_Down position",
+          "key": "RightButton",
+          "pos": {
+            "x": 0.5766,
+            "y": 0.7123
+          },
+          "switchMap": false,
+          "type": "KMT_CLICK"
+        }
+      ]
+    }
+  },
+  "width": 3200,
+  "height": 2136
+}

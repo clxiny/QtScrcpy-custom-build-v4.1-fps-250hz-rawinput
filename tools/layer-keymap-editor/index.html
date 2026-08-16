@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Layer KeyMap Editor</title>
+  <title>分层按键映射编辑器</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11,108 +11,140 @@
     <header class="app-header">
       <div>
         <p class="eyebrow">QtScrcpy</p>
-        <h1>Layer KeyMap Editor</h1>
+        <h1>分层按键映射编辑器</h1>
       </div>
       <div class="header-actions">
-        <label class="command-button" title="Import a KeyMap JSON file">
-          Import JSON
+        <label class="command-button" title="导入 KeyMap JSON 文件">
+          导入 JSON
           <input id="file-input" type="file" accept="application/json,.json" hidden>
         </label>
-        <button id="sample-button" class="quiet-button" type="button">Sample</button>
-        <button id="export-button" class="command-button" type="button">Export JSON</button>
+        <button id="sample-button" class="quiet-button" type="button">示例</button>
+        <button id="export-button" class="command-button" type="button">导出 JSON</button>
       </div>
     </header>
-
-    <aside class="sidebar left-sidebar">
-      <section class="panel-section">
-        <div class="section-heading">
-          <h2>Layers</h2>
-          <button id="convert-button" class="icon-button" type="button" title="Convert a legacy single-layer map to layers">&#8645;</button>
-        </div>
-        <div id="layer-list" class="layer-list"></div>
-        <div class="inline-form">
-          <input id="new-layer-name" type="text" spellcheck="false" placeholder="new layer">
-          <button id="add-layer-button" class="icon-button positive" type="button" title="Add layer">+</button>
-        </div>
-      </section>
-
-      <section class="panel-section">
-        <h2>Layer Settings</h2>
-        <label class="field-label" for="default-layer">Default layer</label>
-        <select id="default-layer"></select>
-        <label class="field-label" for="parent-layer">Parent layer</label>
-        <select id="parent-layer"></select>
-        <div class="layer-actions">
-          <button id="duplicate-layer-button" class="quiet-button" type="button">Duplicate</button>
-          <button id="delete-layer-button" class="danger-button" type="button">Delete</button>
-        </div>
-      </section>
-
-      <section class="panel-section fps-fields">
-        <h2>FPS View</h2>
-        <div class="two-columns">
-          <label><span>Start X</span><input id="view-start-x" type="number" min="0" max="1" step="0.0001"></label>
-          <label><span>Start Y</span><input id="view-start-y" type="number" min="0" max="1" step="0.0001"></label>
-          <label><span>Speed X</span><input id="view-speed-x" type="number" min="0.001" step="0.01"></label>
-          <label><span>Speed Y</span><input id="view-speed-y" type="number" min="0.001" step="0.01"></label>
-        </div>
-      </section>
-    </aside>
 
     <main class="workspace">
       <div class="workspace-toolbar">
         <div id="active-layer-label" class="active-layer-label"></div>
         <div class="toolbar-actions">
-          <button id="add-click-button" class="quiet-button" type="button">Add Click</button>
-          <button id="fit-button" class="icon-button" type="button" title="Fit board">&#10530;</button>
+          <label class="quiet-button file-button" title="加载仅用于核对点位的本地图片">
+            加载背景图
+            <input id="background-image-input" type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.bmp" hidden>
+          </label>
+          <button id="clear-background-button" class="icon-button" type="button" title="清除背景图" aria-label="清除背景图">&#215;</button>
+          <button id="fit-button" class="icon-button" type="button" title="定位到画布">&#10530;</button>
         </div>
       </div>
       <div id="board-wrap" class="board-wrap">
-        <div id="board" class="board" aria-label="KeyMap layout board">
+        <div id="board" class="board" aria-label="按键映射布局画布">
           <div class="crosshair horizontal"></div>
           <div class="crosshair vertical"></div>
           <div id="node-layer" class="node-layer"></div>
         </div>
       </div>
       <footer class="workspace-footer">
-        <span id="file-label">Unsaved map</span>
+        <span id="file-label">未保存映射</span>
+        <span id="background-label" class="background-label" hidden></span>
         <span id="validation-label"></span>
       </footer>
     </main>
 
     <aside class="sidebar right-sidebar">
+      <section class="panel-section">
+        <div class="section-heading">
+          <h2>图层</h2>
+          <button id="convert-button" class="icon-button" type="button" title="将旧版单层映射转换为分层映射">&#8645;</button>
+        </div>
+        <div id="layer-list" class="layer-list"></div>
+        <div class="inline-form">
+          <input id="new-layer-name" type="text" spellcheck="false" placeholder="新图层名称">
+          <button id="add-layer-button" class="icon-button positive" type="button" title="添加图层">+</button>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h2>图层设置</h2>
+        <label class="field-label" for="default-layer">默认图层</label>
+        <select id="default-layer"></select>
+        <label class="field-label" for="parent-layer">父图层</label>
+        <select id="parent-layer"></select>
+        <div class="layer-actions">
+          <button id="duplicate-layer-button" class="quiet-button" type="button">复制</button>
+          <button id="delete-layer-button" class="danger-button" type="button">删除</button>
+        </div>
+      </section>
+
+      <section class="panel-section fps-fields">
+        <h2>FPS 视角</h2>
+        <div class="two-columns">
+          <label><span>起点 X</span><input id="view-start-x" type="number" min="0" max="1" step="0.0001"></label>
+          <label><span>起点 Y</span><input id="view-start-y" type="number" min="0" max="1" step="0.0001"></label>
+          <label><span>X 轴速度</span><input id="view-speed-x" type="number" min="0.001" step="0.01"></label>
+          <label><span>Y 轴速度</span><input id="view-speed-y" type="number" min="0.001" step="0.01"></label>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-heading">
+          <h2>添加节点</h2>
+          <span id="node-count" class="count-badge">0</span>
+        </div>
+        <div class="node-type-grid">
+          <button id="add-click-button" class="quiet-button" type="button">点击</button>
+          <button id="add-double-click-button" class="quiet-button" type="button">双击</button>
+          <button id="add-drag-button" class="quiet-button" type="button">拖拽</button>
+          <button id="add-steer-button" class="quiet-button" type="button">方向轮盘</button>
+          <button id="place-fps-button" class="quiet-button fps-place-button" type="button" aria-pressed="false">放置 FPS 起点</button>
+        </div>
+        <div id="node-list" class="node-list" aria-label="当前图层节点列表"></div>
+      </section>
+
       <section class="panel-section selected-panel">
-        <h2>Selected Binding</h2>
-        <div id="empty-selection" class="empty-state">No binding selected</div>
+        <h2>选中按键</h2>
+        <div id="empty-selection" class="empty-state">尚未选中按键</div>
         <form id="binding-form" class="binding-form" hidden>
-          <label class="field-label" for="node-type">Type</label>
+          <label class="field-label" for="node-type">类型</label>
           <select id="node-type">
-            <option value="KMT_CLICK">Click</option>
-            <option value="KMT_CLICK_TWICE">Double Click</option>
-            <option value="KMT_DRAG">Drag</option>
-            <option value="KMT_STEER_WHEEL">Steer Wheel</option>
+            <option value="KMT_CLICK">点击</option>
+            <option value="KMT_CLICK_TWICE">双击</option>
+            <option value="KMT_DRAG">拖拽</option>
+            <option value="KMT_STEER_WHEEL">方向轮盘</option>
           </select>
 
-          <label class="field-label" for="binding-key">Binding</label>
-          <input id="binding-key" type="text" spellcheck="false">
+          <label class="field-label" for="binding-key">绑定按键</label>
+          <input id="binding-key" class="key-capture-input" type="text" spellcheck="false" data-binding-field="key" title="点击后按下键盘或鼠标按键" readonly>
 
           <div class="two-columns position-fields">
             <label><span>X</span><input id="position-x" type="number" min="0" max="1" step="0.0001"></label>
             <label><span>Y</span><input id="position-y" type="number" min="0" max="1" step="0.0001"></label>
           </div>
 
-          <label class="field-label" for="switch-layer">Switch layer after release</label>
+          <label class="field-label" for="switch-layer">松开后切换图层</label>
           <select id="switch-layer"></select>
 
           <label id="switch-map-row" class="check-row">
             <input id="switch-map" type="checkbox">
-            <span>Legacy switchMap</span>
+            <span>松开后释放 / 重新捕获鼠标</span>
           </label>
+          <p id="switch-map-help" class="field-help">旧版 switchMap：按键照常发送到游戏；松开时切换 FPS 鼠标捕获，适合背包、地图等界面。</p>
+
+          <section id="steer-settings" class="steer-settings" hidden>
+            <p class="field-label">方向键与偏移量</p>
+            <div class="steer-grid-header" aria-hidden="true">
+              <span></span><span>按键</span><span>偏移</span>
+            </div>
+            <label class="steer-direction-row"><span>上</span><input id="steer-up-key" class="key-capture-input" type="text" spellcheck="false" data-binding-field="upKey" title="点击后按下键盘或鼠标按键" aria-label="上方向按键" readonly><input id="steer-up-offset" type="number" min="0" max="1" step="0.0001" aria-label="上方向偏移量"></label>
+            <label class="steer-direction-row"><span>左</span><input id="steer-left-key" class="key-capture-input" type="text" spellcheck="false" data-binding-field="leftKey" title="点击后按下键盘或鼠标按键" aria-label="左方向按键" readonly><input id="steer-left-offset" type="number" min="0" max="1" step="0.0001" aria-label="左方向偏移量"></label>
+            <label class="steer-direction-row"><span>右</span><input id="steer-right-key" class="key-capture-input" type="text" spellcheck="false" data-binding-field="rightKey" title="点击后按下键盘或鼠标按键" aria-label="右方向按键" readonly><input id="steer-right-offset" type="number" min="0" max="1" step="0.0001" aria-label="右方向偏移量"></label>
+            <label class="steer-direction-row"><span>下</span><input id="steer-down-key" class="key-capture-input" type="text" spellcheck="false" data-binding-field="downKey" title="点击后按下键盘或鼠标按键" aria-label="下方向按键" readonly><input id="steer-down-offset" type="number" min="0" max="1" step="0.0001" aria-label="下方向偏移量"></label>
+          </section>
+
+          <button id="delete-node-button" class="danger-button delete-node-button" type="button">删除该节点</button>
         </form>
       </section>
 
       <section class="panel-section">
-        <h2>Validation</h2>
+        <h2>配置校验</h2>
         <ul id="validation-list" class="validation-list"></ul>
       </section>
     </aside>

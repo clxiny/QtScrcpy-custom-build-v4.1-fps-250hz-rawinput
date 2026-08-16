@@ -16,3 +16,4 @@ build-*
 userdata.ini
 Info_Mac.plist
 /ci/build_temp
+/artifacts/run-*/

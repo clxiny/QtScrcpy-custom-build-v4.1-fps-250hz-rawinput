@@ -30,6 +30,8 @@
 - [输入状态恢复](#输入状态恢复)
 - [快捷键与日志](#快捷键与日志)
 - [快速开始](#快速开始)
+- [分层按键可视化编辑器](#分层按键可视化编辑器)
+- [Windows 构建包](#windows-构建包)
 - [从源码构建](#从源码构建)
 - [排障手册](#排障手册)
 - [已知边界](#已知边界)
@@ -123,6 +125,31 @@ Input state recovery requested
 5. 如果设备被直接触摸后视角或拖拽失效，先按 `Ctrl+Shift+R`，观察日志确认恢复完成。
 
 发布包已经包含 Qt 运行库、ADB 组件和与本版本控制消息匹配的定制 `scrcpy-server`。不要用上游原版 server 替换它，否则消息 23/24 无法正确解释。
+
+## 分层按键可视化编辑器
+
+分层 KeyMap 编辑器已作为独立公开项目发布：[QtScrcpy-Layer-Keymap-Editor](https://github.com/clxiny/QtScrcpy-Layer-Keymap-Editor)。它支持本项目的 `layers`、`switchLayer`、旧版 `switchMap`、FPS 起点、背景图核对、方向轮盘四向偏移和键盘/鼠标直接录入；上游的单层编辑器无法完整保留这些扩展字段。
+
+使用方法：
+
+1. 下载或克隆编辑器仓库，直接用浏览器打开 `index.html`；也可以在该目录执行 `node server.js`，然后访问 `http://127.0.0.1:4173`。
+2. 导入本仓库 `keymap/` 中的已有模板，或导入根目录的 `无畏契约幽影.json`；背景图只用于校对位置，不会写入导出的 JSON。
+3. 拖动节点、编辑方向轮盘或点击按键录入框后直接按键盘/鼠标键。背包、地图等节点可勾选“松开后释放 / 重新捕获鼠标”，即旧字段 `switchMap: true`。
+4. 导出 JSON 后，在 QtScrcpy 中载入该配置。`switchLayer` 只切换配置图层；`switchMap` 只切换 FPS 鼠标捕获状态，二者互不替代。
+
+## Windows 构建包
+
+本仓库本身包含可构建的完整源码。已验证的 Windows x64 便携包作为 [v4.1.0-input-recovery-20260816 Release](https://github.com/clxiny/QtScrcpy-custom-build-v4.1-fps-250hz-rawinput/releases/tag/v4.1.0-input-recovery-20260816) 附件提供，下载后即可解压运行：
+
+- 文件：`QtScrcpy-custom-v4.1-input-recovery-win-x64.zip`
+- SHA-256：`4D90CDD70901C7326D5ED585712E30BF90F80A13D07BAAC71540C571160F0019`
+- 内容：`QtScrcpy.exe`、Qt 运行库、ADB 组件、定制 `scrcpy-server` 和 `keymap/无畏契约幽影.json` 模板。
+
+下载后可用以下命令校验：
+
+```powershell
+Get-FileHash .\QtScrcpy-custom-v4.1-input-recovery-win-x64.zip -Algorithm SHA256
+```
 
 ## 从源码构建
 

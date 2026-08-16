@@ -20,10 +20,19 @@ const elements = {
   viewSpeedY: $("#view-speed-y"),
   activeLayerLabel: $("#active-layer-label"),
   addClickButton: $("#add-click-button"),
+  addDoubleClickButton: $("#add-double-click-button"),
+  addDragButton: $("#add-drag-button"),
+  addSteerButton: $("#add-steer-button"),
+  placeFpsButton: $("#place-fps-button"),
+  nodeList: $("#node-list"),
+  nodeCount: $("#node-count"),
   fitButton: $("#fit-button"),
+  backgroundImageInput: $("#background-image-input"),
+  clearBackgroundButton: $("#clear-background-button"),
   board: $("#board"),
   nodeLayer: $("#node-layer"),
   fileLabel: $("#file-label"),
+  backgroundLabel: $("#background-label"),
   validationLabel: $("#validation-label"),
   validationList: $("#validation-list"),
   emptySelection: $("#empty-selection"),
@@ -34,15 +43,88 @@ const elements = {
   positionY: $("#position-y"),
   switchLayer: $("#switch-layer"),
   switchMapRow: $("#switch-map-row"),
-  switchMap: $("#switch-map")
+  switchMapHelp: $("#switch-map-help"),
+  switchMap: $("#switch-map"),
+  deleteNodeButton: $("#delete-node-button"),
+  steerSettings: $("#steer-settings"),
+  steerUpKey: $("#steer-up-key"),
+  steerUpOffset: $("#steer-up-offset"),
+  steerLeftKey: $("#steer-left-key"),
+  steerLeftOffset: $("#steer-left-offset"),
+  steerRightKey: $("#steer-right-key"),
+  steerRightOffset: $("#steer-right-offset"),
+  steerDownKey: $("#steer-down-key"),
+  steerDownOffset: $("#steer-down-offset")
+};
+
+const STEER_DIRECTIONS = [
+  { name: "up", label: "上", keyField: "upKey", offsetField: "upOffset", keyElement: "steerUpKey", offsetElement: "steerUpOffset" },
+  { name: "left", label: "左", keyField: "leftKey", offsetField: "leftOffset", keyElement: "steerLeftKey", offsetElement: "steerLeftOffset" },
+  { name: "right", label: "右", keyField: "rightKey", offsetField: "rightOffset", keyElement: "steerRightKey", offsetElement: "steerRightOffset" },
+  { name: "down", label: "下", keyField: "downKey", offsetField: "downOffset", keyElement: "steerDownKey", offsetElement: "steerDownOffset" }
+];
+
+const NODE_TYPE_LABELS = {
+  KMT_CLICK: "点击",
+  KMT_CLICK_TWICE: "双击",
+  KMT_DRAG: "拖拽",
+  KMT_STEER_WHEEL: "方向轮盘"
+};
+
+const KEY_CODE_MAP = {
+  Backquote: "Key_QuoteLeft",
+  Space: "Key_Space",
+  Tab: "Key_Tab",
+  Escape: "Key_Escape",
+  Enter: "Key_Enter",
+  Backspace: "Key_Backspace",
+  Delete: "Key_Delete",
+  Insert: "Key_Insert",
+  Home: "Key_Home",
+  End: "Key_End",
+  PageUp: "Key_PageUp",
+  PageDown: "Key_PageDown",
+  ArrowUp: "Key_Up",
+  ArrowDown: "Key_Down",
+  ArrowLeft: "Key_Left",
+  ArrowRight: "Key_Right",
+  ShiftLeft: "Key_Shift",
+  ShiftRight: "Key_Shift",
+  ControlLeft: "Key_Control",
+  ControlRight: "Key_Control",
+  AltLeft: "Key_Alt",
+  AltRight: "Key_Alt",
+  Equal: "Key_Equal",
+  Minus: "Key_Minus",
+  BracketLeft: "Key_BracketLeft",
+  BracketRight: "Key_BracketRight",
+  Backslash: "Key_Backslash",
+  Semicolon: "Key_Semicolon",
+  Quote: "Key_Quote",
+  Comma: "Key_Comma",
+  Period: "Key_Period",
+  Slash: "Key_Slash"
+};
+
+const MOUSE_BUTTON_MAP = {
+  0: "LeftButton",
+  1: "MiddleButton",
+  2: "RightButton",
+  3: "BackButton",
+  4: "ForwardButton"
 };
 
 const state = {
   data: createSample(),
   activeLayer: "base",
   selectedIndex: 0,
-  fileName: "layer-keymap.json",
-  dragging: null
+  fileName: "分层按键映射.json",
+  dragging: null,
+  backgroundImageUrl: null,
+  bindingCapture: null,
+  suppressContextMenu: false,
+  selectedFpsOrigin: false,
+  placingFpsOrigin: false
 };
 
 function createSample() {
@@ -177,32 +259,205 @@ function setNodePosition(node, x, y) {
   node[field].y = clamp(validNumber(y, 0.5));
 }
 
+function keyMapValue(event) {
+  if (/^Key[A-Z]$/.test(event.code)) {
+    return `Key_${event.code.slice(3)}`;
+  }
+  if (/^Digit[0-9]$/.test(event.code)) {
+    return `Key_${event.code.slice(5)}`;
+  }
+  if (/^F([1-9]|1[0-2])$/.test(event.code)) {
+    return `Key_${event.code}`;
+  }
+  return KEY_CODE_MAP[event.code] || "";
+}
+
+function cancelBindingCapture() {
+  const capture = state.bindingCapture;
+  if (!capture) {
+    return;
+  }
+  capture.input.classList.remove("capturing");
+  capture.input.value = capture.originalValue;
+  state.bindingCapture = null;
+}
+
+function beginBindingCapture(input) {
+  if (input.disabled || !input.dataset.bindingField) {
+    return;
+  }
+  cancelBindingCapture();
+  state.bindingCapture = {
+    input,
+    field: input.dataset.bindingField,
+    originalValue: input.value,
+    armed: false
+  };
+  input.classList.add("capturing");
+  input.value = "按下按键或鼠标键...";
+  input.focus({ preventScroll: true });
+  window.setTimeout(() => {
+    if (state.bindingCapture && state.bindingCapture.input === input) {
+      state.bindingCapture.armed = true;
+    }
+  }, 0);
+}
+
+function applyCapturedBinding(value) {
+  const capture = state.bindingCapture;
+  const node = selectedNode();
+  if (!capture || !node) {
+    cancelBindingCapture();
+    return;
+  }
+  node[capture.field] = value;
+  capture.input.classList.remove("capturing");
+  state.bindingCapture = null;
+  render();
+}
+
+function captureKeyboardBinding(event) {
+  const capture = state.bindingCapture;
+  if (!capture || !capture.armed) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.code === "Escape") {
+    cancelBindingCapture();
+    setStatus("按键读取已取消");
+    return;
+  }
+  const value = keyMapValue(event);
+  if (value) {
+    applyCapturedBinding(value);
+  }
+}
+
+function captureMouseBinding(event) {
+  const capture = state.bindingCapture;
+  if (!capture || !capture.armed) {
+    return;
+  }
+  const value = MOUSE_BUTTON_MAP[event.button];
+  if (!value) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  state.suppressContextMenu = event.button === 2;
+  window.setTimeout(() => { state.suppressContextMenu = false; }, 0);
+  applyCapturedBinding(value);
+}
+
+function steerDirectionDefinition(name) {
+  return STEER_DIRECTIONS.find((direction) => direction.name === name);
+}
+
+function steerDirectionLimit(node, name) {
+  const center = nodePosition(node);
+  if (name === "up") {
+    return center.y;
+  }
+  if (name === "left") {
+    return center.x;
+  }
+  if (name === "right") {
+    return 1 - center.x;
+  }
+  return 1 - center.y;
+}
+
+function steerDirectionOffset(node, name) {
+  const definition = steerDirectionDefinition(name);
+  return Math.max(0, validNumber(node[definition.offsetField], 0.075));
+}
+
+function steerDirectionPosition(node, name) {
+  const center = nodePosition(node);
+  const offset = clamp(steerDirectionOffset(node, name), 0, steerDirectionLimit(node, name));
+  if (name === "up") {
+    return { x: center.x, y: center.y - offset };
+  }
+  if (name === "left") {
+    return { x: center.x - offset, y: center.y };
+  }
+  if (name === "right") {
+    return { x: center.x + offset, y: center.y };
+  }
+  return { x: center.x, y: center.y + offset };
+}
+
+function setSteerDirectionOffset(node, name, value) {
+  const definition = steerDirectionDefinition(name);
+  const fallback = steerDirectionOffset(node, name);
+  node[definition.offsetField] = clamp(validNumber(value, fallback), 0, steerDirectionLimit(node, name));
+}
+
+function clearBackgroundImage() {
+  if (state.backgroundImageUrl) {
+    URL.revokeObjectURL(state.backgroundImageUrl);
+  }
+  state.backgroundImageUrl = null;
+  elements.board.style.removeProperty("background-image");
+  elements.backgroundLabel.hidden = true;
+  elements.backgroundLabel.textContent = "";
+  elements.clearBackgroundButton.disabled = true;
+}
+
+function isImageFile(file) {
+  return Boolean(file) && (file.type.startsWith("image/") || /\.(png|jpe?g|webp|bmp|gif)$/i.test(file.name));
+}
+
+function loadBackgroundImage(file) {
+  if (!isImageFile(file)) {
+    throw new Error("请选择图片文件");
+  }
+  clearBackgroundImage();
+  state.backgroundImageUrl = URL.createObjectURL(file);
+  elements.board.style.backgroundImage = `url("${state.backgroundImageUrl}")`;
+  elements.backgroundLabel.textContent = `背景图：${file.name}`;
+  elements.backgroundLabel.hidden = false;
+  elements.clearBackgroundButton.disabled = false;
+  setStatus("背景图已加载，仅用于核对点位");
+}
+
 function bindingLabel(node) {
   if (node.type === "KMT_STEER_WHEEL") {
     return "WASD";
   }
   if (node.type === "KMT_DRAG") {
-    return node.key || "Drag";
+    return node.key || "拖拽";
   }
   return node.key || "?";
 }
 
 function pinLabel(node) {
   const binding = bindingLabel(node);
-  const shortLabels = {
-    LeftButton: "L",
-    RightButton: "R",
-    MiddleButton: "M",
-    BackButton: "B",
-    ForwardButton: "F"
+  const displayMap = {
+    QuoteLeft: "`",
+    Space: "SPACE",
+    Control: "CTRL",
+    Shift: "SHIFT",
+    Alt: "ALT",
+    Escape: "ESC",
+    Enter: "ENTER",
+    Backspace: "BKSP",
+    Up: "UP",
+    Down: "DOWN",
+    Left: "LEFT",
+    Right: "RIGHT",
+    LeftButton: "LMB",
+    RightButton: "RMB",
+    MiddleButton: "MMB",
+    BackButton: "MB4",
+    ForwardButton: "MB5"
   };
-  if (shortLabels[binding]) {
-    return shortLabels[binding];
+  const raw = binding.startsWith("Key_") ? binding.slice(4) : binding;
+  if (displayMap[raw]) {
+    return displayMap[raw];
   }
-  if (binding.startsWith("Key_") && binding.length > 4) {
-    return binding.slice(4, 8);
-  }
-  return binding.length > 4 ? binding.slice(0, 4) : binding;
+  return raw.length > 10 ? `${raw.slice(0, 8)}...` : raw;
 }
 
 function ensureLayered() {
@@ -230,11 +485,11 @@ function addLayer() {
   ensureLayered();
   const name = elements.newLayerName.value.trim();
   if (!name || !/^[A-Za-z0-9_-]+$/.test(name)) {
-    setStatus("Layer names use letters, numbers, _ or -", true);
+    setStatus("图层名称只能使用字母、数字、下划线或连字符", true);
     return;
   }
   if (state.data.layers[name]) {
-    setStatus("Layer already exists", true);
+    setStatus("图层名称已存在", true);
     return;
   }
   state.data.layers[name] = { keyMapNodes: [] };
@@ -265,10 +520,10 @@ function deleteActiveLayer() {
   }
   const names = layerNames();
   if (names.length <= 1) {
-    setStatus("A map needs at least one layer", true);
+    setStatus("映射至少需要保留一个图层", true);
     return;
   }
-  if (!window.confirm(`Delete layer "${state.activeLayer}"?`)) {
+  if (!window.confirm(`确定删除图层“${state.activeLayer}”吗？`)) {
     return;
   }
   const removed = state.activeLayer;
@@ -339,12 +594,14 @@ function renderLayers() {
     button.addEventListener("click", () => {
       state.activeLayer = layered ? name : "legacy";
       state.selectedIndex = null;
+      state.selectedFpsOrigin = false;
+      state.placingFpsOrigin = false;
       render();
     });
     row.append(button);
     const tag = document.createElement("span");
     tag.className = "layer-tag";
-    tag.textContent = layered && state.data.layers[name].parent ? `parent: ${state.data.layers[name].parent}` : "";
+    tag.textContent = layered && state.data.layers[name].parent ? `父级：${state.data.layers[name].parent}` : "";
     row.append(tag);
     elements.layerList.append(row);
   });
@@ -354,9 +611,10 @@ function renderLayers() {
   elements.newLayerName.disabled = false;
   elements.duplicateLayerButton.disabled = !layered;
   elements.deleteLayerButton.disabled = !layered || names.length <= 1;
+  elements.clearBackgroundButton.disabled = !state.backgroundImageUrl;
 }
 
-function populateSelect(select, entries, selected, emptyLabel = "None") {
+function populateSelect(select, entries, selected, emptyLabel = "无") {
   select.innerHTML = "";
   if (emptyLabel !== null) {
     const empty = document.createElement("option");
@@ -380,7 +638,7 @@ function renderLayerSettings() {
   elements.parentLayer.disabled = !layered;
   if (!layered) {
     populateSelect(elements.defaultLayer, ["legacy"], "legacy", null);
-    populateSelect(elements.parentLayer, [], "", "Not available for legacy maps");
+    populateSelect(elements.parentLayer, [], "", "旧版映射不可用");
     return;
   }
   populateSelect(elements.defaultLayer, names, state.data.defaultLayer, null);
@@ -396,21 +654,124 @@ function renderViewSettings() {
 }
 
 function renderBoard() {
-  const width = validNumber(state.data.width, 3200);
-  const height = validNumber(state.data.height, 2136);
-  elements.board.style.aspectRatio = `${width} / ${height}`;
+  elements.board.style.removeProperty("aspect-ratio");
   elements.nodeLayer.innerHTML = "";
   nodesForActiveLayer().forEach((node, index) => {
     const position = nodePosition(node);
+    if (node.type === "KMT_STEER_WHEEL") {
+      renderSteerDirections(node, index, position);
+    }
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `map-node${node.type === "KMT_STEER_WHEEL" ? " steer" : ""}${node.type === "KMT_DRAG" ? " drag" : ""}${index === state.selectedIndex ? " selected" : ""}`;
+    const typeClass = (node.type || "unknown").toLowerCase().replaceAll("_", "-");
+    button.className = `map-node type-${typeClass}${node.type === "KMT_STEER_WHEEL" ? " steer" : ""}${node.type === "KMT_DRAG" ? " drag" : ""}${index === state.selectedIndex ? " selected" : ""}`;
     button.style.left = `${clamp(validNumber(position.x, 0.5)) * 100}%`;
     button.style.top = `${clamp(validNumber(position.y, 0.5)) * 100}%`;
     button.dataset.index = String(index);
-    button.textContent = pinLabel(node);
+    button.textContent = node.type === "KMT_STEER_WHEEL" ? "" : pinLabel(node);
     button.title = `${bindingLabel(node)} (${position.x}, ${position.y})`;
     elements.nodeLayer.append(button);
+  });
+  renderFpsOrigin();
+}
+
+function renderFpsOrigin() {
+  const map = getViewMap();
+  const position = isObject(map.startPos) ? map.startPos : { x: 0.5, y: 0.5 };
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `fps-origin-node${state.selectedFpsOrigin ? " selected" : ""}`;
+  button.style.left = `${clamp(validNumber(position.x, 0.5)) * 100}%`;
+  button.style.top = `${clamp(validNumber(position.y, 0.5)) * 100}%`;
+  button.dataset.fpsOrigin = "true";
+  button.textContent = "FPS";
+  button.title = `FPS 视角起点 (${position.x}, ${position.y})`;
+  elements.nodeLayer.append(button);
+}
+
+function setFpsOrigin(x, y) {
+  const map = ensureViewMap();
+  map.startPos.x = clamp(validNumber(x, map.startPos.x));
+  map.startPos.y = clamp(validNumber(y, map.startPos.y));
+}
+
+function renderNodeList() {
+  const nodes = nodesForActiveLayer();
+  elements.nodeList.innerHTML = "";
+  elements.nodeCount.textContent = String(nodes.length);
+  nodes.forEach((node, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `node-list-button${index === state.selectedIndex ? " active" : ""}`;
+    button.title = `${NODE_TYPE_LABELS[node.type] || node.type || "未指定类型"}：${bindingLabel(node)}`;
+
+    const nodeIndex = document.createElement("span");
+    nodeIndex.className = "node-list-index";
+    nodeIndex.textContent = String(index + 1);
+    const label = document.createElement("span");
+    label.className = "node-list-label";
+    label.textContent = bindingLabel(node);
+    const type = document.createElement("span");
+    type.className = "node-list-type";
+    type.textContent = NODE_TYPE_LABELS[node.type] || node.type || "未知";
+    button.append(nodeIndex, label, type);
+    button.addEventListener("click", () => {
+      state.selectedIndex = index;
+      state.selectedFpsOrigin = false;
+      state.placingFpsOrigin = false;
+      render();
+    });
+    elements.nodeList.append(button);
+  });
+}
+
+function renderSteerDirections(node, index, center) {
+  STEER_DIRECTIONS.forEach((direction) => {
+    const position = steerDirectionPosition(node, direction.name);
+    const line = document.createElement("div");
+    line.className = "steer-guide-line";
+    line.dataset.index = String(index);
+    line.dataset.steerDirection = direction.name;
+    positionSteerGuideLine(line, center, position);
+    elements.nodeLayer.append(line);
+
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "map-node steer-direction";
+    handle.style.left = `${position.x * 100}%`;
+    handle.style.top = `${position.y * 100}%`;
+    handle.dataset.index = String(index);
+    handle.dataset.steerDirection = direction.name;
+    handle.textContent = pinLabel({ key: node[direction.keyField] || "?" });
+    handle.title = `${direction.label}方向：${node[direction.keyField] || "未设置"}，偏移 ${steerDirectionOffset(node, direction.name).toFixed(4)}`;
+    elements.nodeLayer.append(handle);
+  });
+}
+
+function positionSteerGuideLine(line, center, position) {
+  const horizontal = (position.x - center.x) * 100;
+  const vertical = (position.y - center.y) * 100;
+  line.style.left = `${center.x * 100}%`;
+  line.style.top = `${center.y * 100}%`;
+  line.style.width = `${Math.hypot(horizontal, vertical)}%`;
+  line.style.transform = `rotate(${Math.atan2(vertical, horizontal) * (180 / Math.PI)}deg)`;
+}
+
+function updateSteerDirectionsOnBoard(node, index) {
+  const center = nodePosition(node);
+  STEER_DIRECTIONS.forEach((direction) => {
+    const position = steerDirectionPosition(node, direction.name);
+    const selector = `[data-index="${index}"][data-steer-direction="${direction.name}"]`;
+    const line = elements.nodeLayer.querySelector(`.steer-guide-line${selector}`);
+    const handle = elements.nodeLayer.querySelector(`.steer-direction${selector}`);
+    if (line) {
+      positionSteerGuideLine(line, center, position);
+    }
+    if (handle) {
+      handle.style.left = `${position.x * 100}%`;
+      handle.style.top = `${position.y * 100}%`;
+      handle.title = `${direction.label}方向：${node[direction.keyField] || "未设置"}，偏移 ${steerDirectionOffset(node, direction.name).toFixed(4)}`;
+    }
   });
 }
 
@@ -428,35 +789,43 @@ function renderBindingForm() {
   elements.bindingKey.disabled = isSteer;
   elements.positionX.value = validNumber(position.x, 0.5);
   elements.positionY.value = validNumber(position.y, 0.5);
-  populateSelect(elements.switchLayer, isLayered() ? layerNames() : [], node.switchLayer || "", "No layer switch");
+  populateSelect(elements.switchLayer, isLayered() ? layerNames() : [], node.switchLayer || "", "不切换图层");
   elements.switchLayer.disabled = !isLayered();
   elements.switchMapRow.hidden = node.type !== "KMT_CLICK";
+  elements.switchMapHelp.hidden = node.type !== "KMT_CLICK";
   elements.switchMap.checked = Boolean(node.switchMap);
+  elements.steerSettings.hidden = !isSteer;
+  if (isSteer) {
+    STEER_DIRECTIONS.forEach((direction) => {
+      elements[direction.keyElement].value = node[direction.keyField] || "";
+      elements[direction.offsetElement].value = steerDirectionOffset(node, direction.name);
+    });
+  }
 }
 
 function validateMap() {
   const messages = [];
   if (typeof state.data.switchKey !== "string" || !state.data.switchKey) {
-    messages.push({ error: true, text: "switchKey is required" });
+    messages.push({ error: true, text: "字段 switchKey 为必填项" });
   }
   if (isLayered()) {
     const names = layerNames();
     if (!names.includes(state.data.defaultLayer)) {
-      messages.push({ error: true, text: "defaultLayer must name an existing layer" });
+      messages.push({ error: true, text: "字段 defaultLayer 必须引用已有图层" });
     }
     for (const name of names) {
       const layer = state.data.layers[name];
       if (!Array.isArray(layer.keyMapNodes)) {
-        messages.push({ error: true, text: `${name}: keyMapNodes must be an array` });
+        messages.push({ error: true, text: `${name}：字段 keyMapNodes 必须是数组` });
       }
       if (layer.parent && !state.data.layers[layer.parent]) {
-        messages.push({ error: true, text: `${name}: parent does not exist` });
+        messages.push({ error: true, text: `${name}：父图层不存在` });
       }
       const chain = new Set([name]);
       let parent = layer.parent;
       while (parent) {
         if (chain.has(parent)) {
-          messages.push({ error: true, text: `${name}: parent cycle` });
+          messages.push({ error: true, text: `${name}：父图层存在循环引用` });
           break;
         }
         chain.add(parent);
@@ -468,21 +837,32 @@ function validateMap() {
   contexts.forEach(([name, layer]) => {
     (layer.keyMapNodes || []).forEach((node, index) => {
       if (!node.type) {
-        messages.push({ error: true, text: `${name} #${index + 1}: type is required` });
+        messages.push({ error: true, text: `${name} #${index + 1}：类型为必填项` });
       }
       if (node.type !== "KMT_STEER_WHEEL" && !node.key) {
-        messages.push({ error: true, text: `${name} #${index + 1}: binding is required` });
+        messages.push({ error: true, text: `${name} #${index + 1}：绑定按键为必填项` });
+      }
+      if (node.type === "KMT_STEER_WHEEL") {
+        STEER_DIRECTIONS.forEach((direction) => {
+          if (typeof node[direction.keyField] !== "string" || !node[direction.keyField]) {
+            messages.push({ error: true, text: `${name} #${index + 1}：${direction.label}方向按键为必填项` });
+          }
+          const offset = Number(node[direction.offsetField]);
+          if (!Number.isFinite(offset) || offset < 0 || offset > 1) {
+            messages.push({ error: true, text: `${name} #${index + 1}：${direction.label}方向偏移量无效` });
+          }
+        });
       }
       if (node.switchLayer && (!isLayered() || !state.data.layers[node.switchLayer])) {
-        messages.push({ error: true, text: `${name} #${index + 1}: switchLayer does not exist` });
+        messages.push({ error: true, text: `${name} #${index + 1}：目标 switchLayer 不存在` });
       }
       const position = nodePosition(node);
       if (!Number.isFinite(Number(position.x)) || !Number.isFinite(Number(position.y))) {
-        messages.push({ error: true, text: `${name} #${index + 1}: position is invalid` });
+        messages.push({ error: true, text: `${name} #${index + 1}：坐标无效` });
       }
     });
   });
-  return messages.length ? messages : [{ error: false, text: "Configuration is valid" }];
+  return messages.length ? messages : [{ error: false, text: "配置有效" }];
 }
 
 function renderValidation() {
@@ -495,7 +875,7 @@ function renderValidation() {
     item.textContent = message.text;
     elements.validationList.append(item);
   });
-  elements.validationLabel.textContent = errors.length ? `${errors.length} issue${errors.length === 1 ? "" : "s"}` : "Valid";
+  elements.validationLabel.textContent = errors.length ? `发现 ${errors.length} 个问题` : "校验通过";
   elements.validationLabel.className = errors.length ? "error" : "ok";
 }
 
@@ -507,11 +887,14 @@ function render() {
   renderLayerSettings();
   renderViewSettings();
   renderBoard();
+  renderNodeList();
   renderBindingForm();
   renderValidation();
-  const activeName = isLayered() ? state.activeLayer : "legacy";
-  elements.activeLayerLabel.textContent = `Layer: ${activeName}`;
+  const activeName = isLayered() ? state.activeLayer : "旧版映射";
+  elements.activeLayerLabel.textContent = `当前图层：${activeName}`;
   elements.fileLabel.textContent = state.fileName;
+  elements.placeFpsButton.classList.toggle("active", state.placingFpsOrigin);
+  elements.placeFpsButton.setAttribute("aria-pressed", String(state.placingFpsOrigin));
 }
 
 function setStatus(message, error = false) {
@@ -544,10 +927,43 @@ function replaceSelectedNode(type) {
   render();
 }
 
-function addClick() {
+function addNode(type) {
   const nodes = nodesForActiveLayer();
-  nodes.push(createClick("Key_Unknown", 0.5, 0.5));
+  let node;
+  if (type === "KMT_STEER_WHEEL") {
+    node = createSteerWheel();
+    node.centerPos = { x: 0.5, y: 0.5 };
+  } else if (type === "KMT_DRAG") {
+    node = {
+      type,
+      key: "Key_Unknown",
+      startPos: { x: 0.5, y: 0.5 },
+      endPos: { x: 0.6, y: 0.5 }
+    };
+  } else {
+    node = createClick("Key_Unknown", 0.5, 0.5);
+    node.type = type;
+  }
+  nodes.push(node);
   state.selectedIndex = nodes.length - 1;
+  state.selectedFpsOrigin = false;
+  state.placingFpsOrigin = false;
+  render();
+}
+
+function addClick() {
+  addNode("KMT_CLICK");
+}
+
+function deleteSelectedNode() {
+  if (!Number.isInteger(state.selectedIndex)) {
+    return;
+  }
+  if (!window.confirm("确定删除选中的节点吗？")) {
+    return;
+  }
+  nodesForActiveLayer().splice(state.selectedIndex, 1);
+  state.selectedIndex = null;
   render();
 }
 
@@ -557,7 +973,7 @@ function downloadJson() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = state.fileName.replace(/\.json$/i, "") + "-edited.json";
+  link.download = state.fileName.replace(/\.json$/i, "") + "-已编辑.json";
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -565,13 +981,26 @@ function downloadJson() {
 function loadJson(text, fileName) {
   const parsed = JSON.parse(text);
   if (!isObject(parsed)) {
-    throw new Error("The JSON root must be an object");
+    throw new Error("JSON 根节点必须是对象");
   }
   state.data = parsed;
-  state.fileName = fileName || "keymap.json";
+  state.fileName = fileName || "按键映射.json";
   state.activeLayer = isObject(parsed.layers) ? (parsed.defaultLayer || Object.keys(parsed.layers)[0]) : "legacy";
   state.selectedIndex = null;
+  state.selectedFpsOrigin = false;
+  state.placingFpsOrigin = false;
   render();
+}
+
+async function loadFile(file) {
+  if (!file) {
+    return;
+  }
+  if (isImageFile(file)) {
+    loadBackgroundImage(file);
+    return;
+  }
+  loadJson(await file.text(), file.name);
 }
 
 function updateViewMap() {
@@ -590,7 +1019,7 @@ elements.fileInput.addEventListener("change", async () => {
     return;
   }
   try {
-    loadJson(await file.text(), file.name);
+    await loadFile(file);
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -598,11 +1027,28 @@ elements.fileInput.addEventListener("change", async () => {
   }
 });
 
+elements.backgroundImageInput.addEventListener("change", () => {
+  const [file] = elements.backgroundImageInput.files;
+  try {
+    loadBackgroundImage(file);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    elements.backgroundImageInput.value = "";
+  }
+});
+elements.clearBackgroundButton.addEventListener("click", () => {
+  clearBackgroundImage();
+  setStatus("背景图已清除");
+});
+
 elements.sampleButton.addEventListener("click", () => {
   state.data = createSample();
   state.activeLayer = "base";
   state.selectedIndex = 0;
-  state.fileName = "layer-keymap-sample.json";
+  state.selectedFpsOrigin = false;
+  state.placingFpsOrigin = false;
+  state.fileName = "分层按键映射示例.json";
   render();
 });
 elements.exportButton.addEventListener("click", downloadJson);
@@ -638,17 +1084,63 @@ elements.parentLayer.addEventListener("change", () => {
   input.addEventListener("change", updateViewMap);
 });
 elements.addClickButton.addEventListener("click", addClick);
+elements.addDoubleClickButton.addEventListener("click", () => addNode("KMT_CLICK_TWICE"));
+elements.addDragButton.addEventListener("click", () => addNode("KMT_DRAG"));
+elements.addSteerButton.addEventListener("click", () => addNode("KMT_STEER_WHEEL"));
+elements.placeFpsButton.addEventListener("click", () => {
+  state.placingFpsOrigin = !state.placingFpsOrigin;
+  state.selectedFpsOrigin = state.placingFpsOrigin;
+  state.selectedIndex = null;
+  render();
+  if (state.placingFpsOrigin) {
+    setStatus("在画布上点击以放置 FPS 起点");
+  }
+});
 elements.fitButton.addEventListener("click", () => elements.board.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }));
 
+[elements.bindingKey, ...STEER_DIRECTIONS.map((direction) => elements[direction.keyElement])].forEach((input) => {
+  input.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    beginBindingCapture(input);
+  });
+});
+document.addEventListener("keydown", captureKeyboardBinding, true);
+document.addEventListener("mousedown", (event) => {
+  if (event.target.closest && event.target.closest(".key-capture-input")) {
+    return;
+  }
+  captureMouseBinding(event);
+}, true);
+document.addEventListener("contextmenu", (event) => {
+  if (state.bindingCapture || state.suppressContextMenu) {
+    event.preventDefault();
+    state.suppressContextMenu = false;
+  }
+}, true);
+window.addEventListener("blur", cancelBindingCapture);
+
 elements.nodeLayer.addEventListener("pointerdown", (event) => {
-  const target = event.target.closest(".map-node");
+  const target = event.target.closest(".map-node, .fps-origin-node");
   if (!target) {
     return;
   }
+  if (target.dataset.fpsOrigin) {
+    state.selectedIndex = null;
+    state.selectedFpsOrigin = true;
+    state.placingFpsOrigin = false;
+    state.dragging = { pointerId: event.pointerId, target, fpsOrigin: true };
+    target.setPointerCapture(event.pointerId);
+    elements.nodeLayer.querySelectorAll(".map-node.selected, .fps-origin-node.selected").forEach((node) => node.classList.remove("selected"));
+    target.classList.add("selected");
+    renderBindingForm();
+    return;
+  }
   state.selectedIndex = Number(target.dataset.index);
-  state.dragging = { pointerId: event.pointerId, index: state.selectedIndex, target };
+  state.selectedFpsOrigin = false;
+  state.placingFpsOrigin = false;
+  state.dragging = { pointerId: event.pointerId, index: state.selectedIndex, target, steerDirection: target.dataset.steerDirection || null };
   target.setPointerCapture(event.pointerId);
-  elements.nodeLayer.querySelectorAll(".map-node.selected").forEach((node) => node.classList.remove("selected"));
+  elements.nodeLayer.querySelectorAll(".map-node.selected, .fps-origin-node.selected").forEach((node) => node.classList.remove("selected"));
   target.classList.add("selected");
   renderBindingForm();
 });
@@ -657,12 +1149,43 @@ elements.nodeLayer.addEventListener("pointermove", (event) => {
     return;
   }
   const rect = elements.board.getBoundingClientRect();
+  const x = clamp((event.clientX - rect.left) / rect.width);
+  const y = clamp((event.clientY - rect.top) / rect.height);
+  if (state.dragging.fpsOrigin) {
+    setFpsOrigin(x, y);
+    state.dragging.target.style.left = `${x * 100}%`;
+    state.dragging.target.style.top = `${y * 100}%`;
+    renderViewSettings();
+    return;
+  }
   const node = nodesForActiveLayer()[state.dragging.index];
-  setNodePosition(node, (event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height);
-  const position = nodePosition(node);
-  state.dragging.target.style.left = `${position.x * 100}%`;
-  state.dragging.target.style.top = `${position.y * 100}%`;
+  if (state.dragging.steerDirection) {
+    const direction = state.dragging.steerDirection;
+    const center = nodePosition(node);
+    const offset = direction === "up" || direction === "down" ? Math.abs(y - center.y) : Math.abs(x - center.x);
+    setSteerDirectionOffset(node, direction, offset);
+    updateSteerDirectionsOnBoard(node, state.dragging.index);
+  } else {
+    setNodePosition(node, x, y);
+    const position = nodePosition(node);
+    state.dragging.target.style.left = `${position.x * 100}%`;
+    state.dragging.target.style.top = `${position.y * 100}%`;
+    if (node.type === "KMT_STEER_WHEEL") {
+      updateSteerDirectionsOnBoard(node, state.dragging.index);
+    }
+  }
   renderBindingForm();
+});
+elements.board.addEventListener("pointerdown", (event) => {
+  if (!state.placingFpsOrigin) {
+    return;
+  }
+  const rect = elements.board.getBoundingClientRect();
+  setFpsOrigin((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height);
+  state.placingFpsOrigin = false;
+  state.selectedFpsOrigin = true;
+  state.selectedIndex = null;
+  render();
 });
 elements.nodeLayer.addEventListener("pointerup", (event) => {
   if (state.dragging && state.dragging.pointerId === event.pointerId) {
@@ -711,6 +1234,18 @@ elements.switchMap.addEventListener("change", () => {
     renderValidation();
   }
 });
+elements.deleteNodeButton.addEventListener("click", deleteSelectedNode);
+STEER_DIRECTIONS.forEach((direction) => {
+  [elements[direction.keyElement], elements[direction.offsetElement]].forEach((input) => input.addEventListener("change", () => {
+    const node = selectedNode();
+    if (!node || node.type !== "KMT_STEER_WHEEL") {
+      return;
+    }
+    node[direction.keyField] = elements[direction.keyElement].value.trim();
+    setSteerDirectionOffset(node, direction.name, elements[direction.offsetElement].value);
+    render();
+  }));
+});
 
 document.addEventListener("dragover", (event) => event.preventDefault());
 document.addEventListener("drop", async (event) => {
@@ -720,7 +1255,7 @@ document.addEventListener("drop", async (event) => {
     return;
   }
   try {
-    loadJson(await file.text(), file.name);
+    await loadFile(file);
   } catch (error) {
     setStatus(error.message, true);
   }
